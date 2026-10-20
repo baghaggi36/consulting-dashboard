@@ -1,0 +1,16 @@
+# 비밀 값(API 키 등)이 들어 있는 환경 설정 파일
+.env
+.env.*
+
+# 파이썬이 자동으로 만드는 실행 캐시 파일
+__pycache__/
+*.pyc
+
+# Claude Code 개인 설정(내 컴퓨터에서만 쓰는 권한 설정)
+.claude/settings.local.json
+
+# 운영체제·편집기가 자동으로 만드는 파일
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
