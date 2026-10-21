@@ -12,6 +12,8 @@ from supabase import create_client
 DATA_FILE = Path(__file__).parent / "data" / "records.csv"
 PRD_FILE = Path(__file__).parent / "PRD.md"
 MEMO_TABLE = "client_memos"
+# 화면 3에서 쓰고 읽는 업무 기록 표
+WORK_TABLE = "work_records"
 # 오른쪽 아래 대화창에서 물은 말과 받은 답을 한 줄씩 남기는 표
 CHAT_LOG_TABLE = "chat_logs"
 CHAT_LOG_LIMIT = 20
@@ -178,8 +180,111 @@ def show_detail(df):
 
     show_memos(client)
 
+    st.button(
+        "업무 기록 작성·수정",
+        use_container_width=True,
+        on_click=go,
+        args=("record", client),
+    )
+    st.caption("업무 기록 작성·수정 → 화면 3")
+
     st.button("목록으로", use_container_width=True, on_click=go, args=("home",))
     st.caption("목록으로 → 화면 1")
+
+
+def show_work_records(client):
+    """화면 3에 이 고객사의 기존 업무 기록을 최근 것부터 보여 준다."""
+    with st.container(border=True):
+        st.subheader("기존 기록 목록")
+
+        try:
+            rows = (
+                get_supabase()
+                .table(WORK_TABLE)
+                .select(
+                    "id, work_date, task, status, next_step, due_date,"
+                    " file_location, revision_note"
+                )
+                .eq("client_name", client)
+                .order("work_date", desc=True)
+                # 같은 날 기록은 나중에 넣은 것이 위로 오게 한다
+                .order("created_at", desc=True)
+                .execute()
+                .data
+            )
+        except Exception as e:
+            st.error(f"기존 기록을 불러오지 못했습니다: {e}")
+            return
+
+        if not rows:
+            st.caption("아직 남긴 업무 기록이 없습니다")
+        for r in rows:
+            # 비어 있는 칸은 None 대신 "-"로 보여 준다
+            r = {k: "-" if v is None else v for k, v in r.items()}
+            with st.container(border=True):
+                st.markdown(f"**{r['work_date']}** · {r['task']} `{r['status']}`")
+                st.caption(f"다음 할 일 {r['next_step']} · 마감 {r['due_date']}")
+                st.caption(f"파일 위치 {r['file_location']}")
+                st.caption(f"수정내용 {r['revision_note']}")
+
+
+def show_record_form(client):
+    """화면 3의 업무 기록 입력 칸 6개와 저장 버튼. 저장하면 Supabase 업무 기록 표에 넣는다."""
+    with st.container(border=True):
+        st.subheader("업무 기록 입력")
+
+        with st.form("record_form"):
+            task = st.text_area("작업내용", placeholder="오늘 처리한 작업을 적어 주세요")
+            status = st.text_input("진행상태", placeholder="예: 진행중, 완료")
+            next_step = st.text_input("다음 할 일")
+            due_date = st.date_input("마감일", value=None)
+            file_location = st.text_input(
+                "파일 위치", placeholder="예: D:\\고객사\\고객사명\\..."
+            )
+            revision_note = st.text_area("수정내용")
+            submitted = st.form_submit_button("저장", use_container_width=True)
+
+        if not submitted:
+            return
+        if not task.strip():
+            st.warning("작업내용을 먼저 입력해 주세요")
+            return
+
+        # 비운 칸은 빈 글자 대신 비어 있음(None)으로 넣는다
+        try:
+            get_supabase().table(WORK_TABLE).insert(
+                {
+                    "client_name": client,
+                    "work_date": date.today().isoformat(),
+                    "task": task.strip(),
+                    "status": status.strip() or None,
+                    "next_step": next_step.strip() or None,
+                    "due_date": due_date.isoformat() if due_date else None,
+                    "file_location": file_location.strip() or None,
+                    "revision_note": revision_note.strip() or None,
+                }
+            ).execute()
+            st.success("업무 기록을 저장했습니다")
+        except Exception as e:
+            st.error(f"업무 기록을 저장하지 못했습니다: {e}")
+
+
+def show_record():
+    st.title("화면 3 · 업무 기록 작성·수정")
+
+    client = st.session_state.client
+
+    with st.container(border=True):
+        st.markdown(f"**고객사명** {client}")
+
+    show_record_form(client)
+
+    show_work_records(client)
+
+    st.button(
+        "고객사 현황으로", use_container_width=True, on_click=go, args=("detail", client)
+    )
+    st.caption("고객사 현황으로 → 화면 2")
 
 
 def ask_chatbot(api_key, messages):
@@ -344,6 +449,8 @@ st.session_state.setdefault("screen", "home")
 
 if st.session_state.screen == "detail":
     show_detail(records)
+elif st.session_state.screen == "record":
+    show_record()
 else:
     show_home(records)
 
