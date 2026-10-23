@@ -142,25 +142,63 @@ def show_memos(client):
             st.write(f"{written:%Y-%m-%d %H:%M} · {m['memo']}")
 
 
+def latest_work(client, csv_latest):
+    """CSV 기록과 화면 3에서 Supabase에 저장한 기록 중 더 최근 것 하나의 작업일·작업내용·진행상태를 돌려준다."""
+    latest = {
+        "work_date": csv_latest.work_date,
+        "task": csv_latest.task,
+        "status": csv_latest.status,
+    }
+    try:
+        rows = (
+            get_supabase()
+            .table(WORK_TABLE)
+            .select("work_date, task, status")
+            .eq("client_name", client)
+            .order("work_date", desc=True)
+            # 같은 날 두 번 저장했으면 나중에 넣은 것을 고른다
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+    except Exception as e:
+        st.error(f"화면 3에서 저장한 기록을 불러오지 못했습니다: {e}")
+        return latest
+
+    if rows:
+        saved = rows[0]
+        saved_date = date.fromisoformat(saved["work_date"])
+        # 작업일이 같으면 화면 3에서 저장한 기록을 더 최근 것으로 본다
+        if saved_date >= latest["work_date"]:
+            latest = {
+                "work_date": saved_date,
+                "task": saved["task"],
+                # 진행상태를 비우고 저장했으면 "-"로 보여 준다
+                "status": saved["status"] or "-",
+            }
+    return latest
+
+
 def show_detail(df):
     st.title("화면 2 · 고객사 현황")
 
     client = st.session_state.client
     records = df[df["client_name"] == client].sort_values("work_date", ascending=False)
-    latest = records.iloc[0]
+    latest = latest_work(client, records.iloc[0])
     open_tasks = records[records["status"] != "완료"].sort_values("due_date")
 
     with st.container(border=True):
         st.markdown(f"**고객사명** {client}")
-        st.markdown(f"**진행상태** `{latest.status}`")
+        st.markdown(f"**진행상태** `{latest['status']}`")
         if not open_tasks.empty:
             due = open_tasks.iloc[0]["due_date"]
             st.markdown(f"**마감일** {due} ({d_day(due)})")
 
     with st.container(border=True):
         st.subheader("① 최근 작업")
-        st.write(latest.task)
-        st.caption(f"작성일 {latest.work_date}")
+        st.write(latest["task"])
+        st.caption(f"작성일 {latest['work_date']}")
 
     with st.container(border=True):
         st.subheader("② 다음 할 일")
