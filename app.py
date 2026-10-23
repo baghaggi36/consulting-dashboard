@@ -14,6 +14,8 @@ PRD_FILE = Path(__file__).parent / "PRD.md"
 MEMO_TABLE = "client_memos"
 # 화면 3에서 쓰고 읽는 업무 기록 표
 WORK_TABLE = "work_records"
+# 화면 3 입력 칸 6개에 대응하는 업무 기록 표의 열
+RECORD_FIELDS = ("task", "status", "next_step", "due_date", "file_location", "revision_note")
 # 오른쪽 아래 대화창에서 물은 말과 받은 답을 한 줄씩 남기는 표
 CHAT_LOG_TABLE = "chat_logs"
 CHAT_LOG_LIMIT = 20
@@ -230,6 +232,26 @@ def show_detail(df):
     st.caption("목록으로 → 화면 1")
 
 
+def pick_record(client, record):
+    """기존 기록 목록에서 고른 기록을 어느 고객사 것인지와 함께 기억해 두고, 입력 칸 6개에 그 값을 채운다."""
+    st.session_state.picked_record = {"client": client, **record}
+    for field in RECORD_FIELDS:
+        value = record[field]
+        if field == "due_date":
+            value = date.fromisoformat(value) if value else None
+        else:
+            # 비어 있는 칸은 빈 글자로 채운다
+            value = value or ""
+        st.session_state[f"rec_{field}"] = value
+
+
+def clear_record_form():
+    """고른 기록을 잊고 입력 칸 6개를 비운다."""
+    st.session_state.pop("picked_record", None)
+    for field in RECORD_FIELDS:
+        st.session_state[f"rec_{field}"] = None if field == "due_date" else ""
+
+
 def show_work_records(client):
     """화면 3에 이 고객사의 기존 업무 기록을 최근 것부터 보여 준다."""
     with st.container(border=True):
@@ -256,30 +278,54 @@ def show_work_records(client):
 
         if not rows:
             st.caption("아직 남긴 업무 기록이 없습니다")
-        for r in rows:
+        for raw in rows:
             # 비어 있는 칸은 None 대신 "-"로 보여 준다
-            r = {k: "-" if v is None else v for k, v in r.items()}
+            r = {k: "-" if v is None else v for k, v in raw.items()}
             with st.container(border=True):
-                st.markdown(f"**{r['work_date']}** · {r['task']} `{r['status']}`")
-                st.caption(f"다음 할 일 {r['next_step']} · 마감 {r['due_date']}")
-                st.caption(f"파일 위치 {r['file_location']}")
-                st.caption(f"수정내용 {r['revision_note']}")
+                left, right = st.columns([6, 1])
+                left.markdown(f"**{r['work_date']}** · {r['task']} `{r['status']}`")
+                left.caption(f"다음 할 일 {r['next_step']} · 마감 {r['due_date']}")
+                left.caption(f"파일 위치 {r['file_location']}")
+                left.caption(f"수정내용 {r['revision_note']}")
+                right.button(
+                    "고르기",
+                    key=f"pick_{r['id']}",
+                    on_click=pick_record,
+                    # 입력 칸에는 "-"가 아니라 원래 값을 채운다
+                    args=(client, raw),
+                )
 
 
 def show_record_form(client):
-    """화면 3의 업무 기록 입력 칸 6개와 저장 버튼. 저장하면 Supabase 업무 기록 표에 넣는다."""
+    """화면 3의 업무 기록 입력 칸 6개와 저장 버튼. 저장하면 고른 기록은 바꾸고, 아니면 Supabase 업무 기록 표에 새로 넣는다."""
     with st.container(border=True):
         st.subheader("업무 기록 입력")
 
+        # 다른 고객사에서 골라 둔 기록은 보여 주지 않는다
+        picked = st.session_state.get("picked_record")
+        if picked and picked["client"] == client:
+            st.info(f"고른 기록: {picked['work_date']} · {picked['task']}")
+
+        st.button("새로 쓰기", on_click=clear_record_form)
+
+        # 마감일 칸은 처음에 비워 둔다
+        st.session_state.setdefault("rec_due_date", None)
+
         with st.form("record_form"):
-            task = st.text_area("작업내용", placeholder="오늘 처리한 작업을 적어 주세요")
-            status = st.text_input("진행상태", placeholder="예: 진행중, 완료")
-            next_step = st.text_input("다음 할 일")
-            due_date = st.date_input("마감일", value=None)
-            file_location = st.text_input(
-                "파일 위치", placeholder="예: D:\\고객사\\고객사명\\..."
+            task = st.text_area(
+                "작업내용", placeholder="오늘 처리한 작업을 적어 주세요", key="rec_task"
             )
-            revision_note = st.text_area("수정내용")
+            status = st.text_input(
+                "진행상태", placeholder="예: 진행중, 완료", key="rec_status"
+            )
+            next_step = st.text_input("다음 할 일", key="rec_next_step")
+            due_date = st.date_input("마감일", key="rec_due_date")
+            file_location = st.text_input(
+                "파일 위치",
+                placeholder="예: D:\\고객사\\고객사명\\...",
+                key="rec_file_location",
+            )
+            revision_note = st.text_area("수정내용", key="rec_revision_note")
             submitted = st.form_submit_button("저장", use_container_width=True)
 
         if not submitted:
@@ -289,17 +335,47 @@ def show_record_form(client):
             return
 
         # 비운 칸은 빈 글자 대신 비어 있음(None)으로 넣는다
+        values = {
+            "task": task.strip(),
+            "status": status.strip() or None,
+            "next_step": next_step.strip() or None,
+            "due_date": due_date.isoformat() if due_date else None,
+            "file_location": file_location.strip() or None,
+            "revision_note": revision_note.strip() or None,
+        }
+
+        # 이 고객사의 기록을 골라 두었으면 그 기록을 바꾸고, 아니면 새로 넣는다
+        if picked and picked["client"] == client:
+            try:
+                changed = (
+                    get_supabase()
+                    .table(WORK_TABLE)
+                    .update(values)
+                    .eq("id", picked["id"])
+                    .execute()
+                    .data
+                )
+            except Exception as e:
+                st.error(f"업무 기록을 고치지 못했습니다: {e}")
+                return
+            # 고치기 허용이 없으면 오류 없이 아무 줄도 바뀌지 않는다
+            if not changed:
+                st.error(
+                    "업무 기록을 고치지 못했습니다: 바뀐 기록이 없습니다."
+                    " Supabase work_records 표의 고치기(UPDATE) 허용을 확인해 주세요"
+                )
+                return
+            # 다시 그릴 때 「고른 기록」 줄에도 고친 값이 보이게 한다
+            st.session_state.picked_record = {"client": client, **changed[0]}
+            st.success("업무 기록을 고쳤습니다")
+            return
+
         try:
             get_supabase().table(WORK_TABLE).insert(
                 {
                     "client_name": client,
                     "work_date": date.today().isoformat(),
-                    "task": task.strip(),
-                    "status": status.strip() or None,
-                    "next_step": next_step.strip() or None,
-                    "due_date": due_date.isoformat() if due_date else None,
-                    "file_location": file_location.strip() or None,
-                    "revision_note": revision_note.strip() or None,
+                    **values,
                 }
             ).execute()
             st.success("업무 기록을 저장했습니다")
