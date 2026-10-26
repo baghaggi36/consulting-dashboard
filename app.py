@@ -278,6 +278,7 @@ def show_work_records(client):
 
         if not rows:
             st.caption("아직 남긴 업무 기록이 없습니다")
+        picked = st.session_state.get("picked_record")
         for raw in rows:
             # 비어 있는 칸은 None 대신 "-"로 보여 준다
             r = {k: "-" if v is None else v for k, v in raw.items()}
@@ -294,6 +295,9 @@ def show_work_records(client):
                     # 입력 칸에는 "-"가 아니라 원래 값을 채운다
                     args=(client, raw),
                 )
+                # 입력 칸은 목록보다 위에 있어 안 보일 수 있으니, 고른 항목 자리에서 알려 준다
+                if picked and picked["client"] == client and picked["id"] == raw["id"]:
+                    st.success("위의 입력 칸에 불러왔어요. 고친 뒤 저장을 누르세요")
 
 
 def show_record_form(client):
