@@ -742,6 +742,25 @@ st.session_state.setdefault("screen", "landing")
 if st.session_state.screen == "landing":
     show_landing()
 else:
+    # 기능 화면 제목(화면 1·2·3)을 왼쪽에 작고 단정하게 보이게 한다. 글자는 그대로 둔다
+    st.html(
+        """
+        <style>
+        [data-testid="stHeading"] h1 {
+            font-size: 22px !important;
+            font-weight: 700 !important;
+            color: #1E293B !important;
+            background: #F0F9FF;
+            border-left: 4px solid #0284C7;
+            border-radius: 6px;
+            padding: 8px 14px !important;
+            margin: 0 0 8px !important;
+            text-align: left;
+        }
+        </style>
+        """
+    )
+
     # 샘플 자료 안내는 기능 화면에서만 보여 준다
     st.caption("샘플 자료로 보여 드립니다")
 
