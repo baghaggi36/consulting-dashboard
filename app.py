@@ -101,7 +101,7 @@ def show_home(df):
             placeholder="고객사를 선택하세요",
             label_visibility="collapsed",
         )
-        if st.button("확인", use_container_width=True):
+        if st.button("확인", type="primary", use_container_width=True):
             if client is None:
                 st.warning("확인할 고객사를 먼저 선택해 주세요")
             else:
@@ -219,6 +219,7 @@ def show_detail(df):
         with record_btn_col:
             st.button(
                 "업무 기록 작성·수정",
+                type="primary",
                 use_container_width=True,
                 on_click=go,
                 args=("record", client),
@@ -370,7 +371,7 @@ def show_record_form(client):
                 key="rec_file_location",
             )
             revision_note = st.text_area("수정내용", key="rec_revision_note")
-            submitted = st.form_submit_button("저장", use_container_width=True)
+            submitted = st.form_submit_button("저장", type="primary", use_container_width=True)
 
         if not submitted:
             return
@@ -761,6 +762,33 @@ else:
             padding: 8px 14px !important;
             margin: 0 0 8px !important;
             text-align: left;
+        }
+        /* 주로 누르는 버튼(확인·업무 기록 작성·수정·저장)은 강조색으로 꽉 채운다.
+           오른쪽 아래 챗봇 아이콘과 대화창 안 버튼은 건드리지 않는다 */
+        :is([data-testid="stMain"], [data-testid="stSidebar"])
+            button[data-testid^="stBaseButton-primary"]:not([data-testid="stPopoverBody"] *) {
+            background: #0284C7;
+            border: 1px solid #0284C7;
+            color: #FFFFFF;
+        }
+        :is([data-testid="stMain"], [data-testid="stSidebar"])
+            button[data-testid^="stBaseButton-primary"]:not([data-testid="stPopoverBody"] *):is(:hover, :active, :focus) {
+            background: #0369A1;
+            border-color: #0369A1;
+            color: #FFFFFF;
+        }
+        /* 나머지 버튼은 흰 바탕에 얇은 테두리 */
+        :is([data-testid="stMain"], [data-testid="stSidebar"])
+            button[data-testid^="stBaseButton-secondary"]:not([data-testid="stPopoverBody"] *):not(.st-key-chatbot *) {
+            background: #FFFFFF;
+            border: 1px solid #CBD5E1;
+            color: #1E293B;
+        }
+        :is([data-testid="stMain"], [data-testid="stSidebar"])
+            button[data-testid^="stBaseButton-secondary"]:not([data-testid="stPopoverBody"] *):not(.st-key-chatbot *):is(:hover, :active, :focus) {
+            background: #FFFFFF;
+            border-color: #0284C7;
+            color: #0284C7;
         }
         </style>
         """
