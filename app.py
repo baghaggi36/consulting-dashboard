@@ -625,8 +625,8 @@ def show_chatbot():
             chat_panel()
 
 
-# 열을 나란히 두려면 화면 너비를 넓게 쓴다
-st.set_page_config(layout="wide")
+# 열을 나란히 두려면 화면 너비를 넓게 쓴다. 브라우저 탭에는 이름과 📋 그림을 보여 준다
+st.set_page_config(page_title="개인용 관리판", page_icon="📋", layout="wide")
 
 st.caption("샘플 자료로 보여 드립니다")
 
