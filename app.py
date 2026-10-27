@@ -202,8 +202,9 @@ def show_detail(df):
     latest = latest_work(client, records.iloc[0])
     open_tasks = records[records["status"] != "완료"].sort_values("due_date")
 
-    # 맨 위 한 줄: 요약과 화면 이동 버튼
-    summary_col, nav_col = st.columns([3, 1])
+    # 맨 위 한 줄: 요약과 화면 이동 버튼.
+    # 버튼 두 개를 나란히 두어 이 줄이 높아지지 않게 하고, 요약과 가운데를 맞춘다
+    summary_col, nav_col = st.columns([2, 1], vertical_alignment="center")
 
     with summary_col, st.container(border=True):
         summary = f"**고객사명** {client} · **진행상태** `{latest['status']}`"
@@ -213,16 +214,20 @@ def show_detail(df):
         st.markdown(summary)
 
     with nav_col:
-        st.button(
-            "업무 기록 작성·수정",
-            use_container_width=True,
-            on_click=go,
-            args=("record", client),
-        )
-        st.caption("업무 기록 작성·수정 → 화면 3")
+        record_btn_col, home_btn_col = st.columns(2)
 
-        st.button("목록으로", use_container_width=True, on_click=go, args=("home",))
-        st.caption("목록으로 → 화면 1")
+        with record_btn_col:
+            st.button(
+                "업무 기록 작성·수정",
+                use_container_width=True,
+                on_click=go,
+                args=("record", client),
+            )
+            st.caption("업무 기록 작성·수정 → 화면 3")
+
+        with home_btn_col:
+            st.button("목록으로", use_container_width=True, on_click=go, args=("home",))
+            st.caption("목록으로 → 화면 1")
 
     # 가운데는 탭 두 개, 오른쪽 열은 한 줄 메모
     main_col, memo_col = st.columns([3, 1])
@@ -428,7 +433,7 @@ def show_record():
     client = st.session_state.client
 
     # 맨 위: 고객사명과 화면 이동 버튼
-    name_col, nav_col = st.columns([3, 1])
+    name_col, nav_col = st.columns([3, 1], vertical_alignment="center")
 
     with name_col, st.container(border=True):
         st.markdown(f"**고객사명** {client}")
