@@ -449,6 +449,113 @@ def show_record():
         show_work_records(client)
 
 
+def show_landing():
+    """서비스를 소개하는 첫 화면. 「시작하기」를 누르면 화면 1로 간다.
+    색은 이 화면을 그릴 때만 넣으므로 기능 화면에는 퍼지지 않는다."""
+    st.html(
+        """
+        <style>
+        [data-testid="stApp"] {
+            background: #F0F9FF;
+            color: #1E293B;
+        }
+        .landing {
+            max-width: 960px;
+            margin: 48px auto 32px;
+            text-align: center;
+            color: #1E293B;
+        }
+        .landing h1 {
+            font-size: 48px;
+            font-weight: 800;
+            color: #1E293B;
+            margin: 0 0 16px;
+        }
+        .landing h1 span {
+            color: #0284C7;
+        }
+        .landing .intro {
+            font-size: 20px;
+            line-height: 1.6;
+            margin: 0 auto 40px;
+            max-width: 720px;
+        }
+        .landing .jobs {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 16px;
+            text-align: left;
+        }
+        .landing .job {
+            background: #FFFFFF;
+            border-top: 4px solid #0284C7;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(30, 41, 59, 0.08);
+        }
+        .landing .job b {
+            display: block;
+            font-size: 18px;
+            color: #0284C7;
+            margin-bottom: 8px;
+        }
+        .landing .job p {
+            margin: 0;
+            line-height: 1.6;
+        }
+        .st-key-start button {
+            background: #0284C7;
+            border-color: #0284C7;
+            color: #FFFFFF;
+            font-size: 18px;
+            font-weight: 700;
+            padding: 12px 0;
+        }
+        .st-key-start button:hover {
+            background: #0369A1;
+            border-color: #0369A1;
+            color: #FFFFFF;
+        }
+        /* 첫 화면에서는 사이드바와 그 여닫는 단추를 감춘다 */
+        [data-testid="stSidebar"],
+        [data-testid="stSidebarCollapsedControl"] {
+            display: none;
+        }
+        @media (max-width: 640px) {
+            .landing h1 { font-size: 34px; }
+            .landing .intro { font-size: 17px; }
+        }
+        </style>
+        <div class="landing">
+            <h1>📋 <span>개인용</span> 관리판</h1>
+            <p class="intro">
+                여러 고객사를 혼자 관리하는 컨설턴트가 고객사를 고르면
+                최근 작업·다음 할 일·마감일·파일 위치를 한 화면에서 보고,
+                폴더를 뒤지지 않고 업무를 바로 이어 가는 관리판입니다.
+            </p>
+            <div class="jobs">
+                <div class="job">
+                    <b>고객사 현황을 한 화면에</b>
+                    <p>고객사를 고르면 최근 작업·진행상태·다음 할 일·마감일·파일 위치·주요 수정내용이 한 번에 나옵니다.</p>
+                </div>
+                <div class="job">
+                    <b>업무 기록 남기고 고치기</b>
+                    <p>오늘 한 일을 적어 저장하면, 관리판을 다시 열어도 그대로 남아 이어서 고칠 수 있습니다.</p>
+                </div>
+                <div class="job">
+                    <b>급한 일과 중요한 일 먼저</b>
+                    <p>마감일이 가까운 업무와 직접 중요 표시한 업무가 화면 1 위쪽에 먼저 보입니다.</p>
+                </div>
+            </div>
+        </div>
+        """
+    )
+
+    _, button_col, _ = st.columns([1, 1, 1])
+    with button_col, st.container(key="start"):
+        st.button("시작하기", use_container_width=True, on_click=go, args=("home",))
+
+
 def ask_chatbot(api_key, messages):
     """고정 지시문과 PRD.md를 규칙으로 붙이고, 지금까지의 대화를 Gemini에 보내 받은 답 글을 돌려준다."""
     rules = CHAT_RULES_FILE.read_text(encoding="utf-8").strip()
@@ -628,16 +735,24 @@ def show_chatbot():
 # 열을 나란히 두려면 화면 너비를 넓게 쓴다. 브라우저 탭에는 이름과 📋 그림을 보여 준다
 st.set_page_config(page_title="개인용 관리판", page_icon="📋", layout="wide")
 
-st.caption("샘플 자료로 보여 드립니다")
-
 records = load_records()
-st.session_state.setdefault("screen", "home")
+# 앱을 열면 서비스 소개 첫 화면이 먼저 뜬다
+st.session_state.setdefault("screen", "landing")
 
-if st.session_state.screen == "detail":
-    show_detail(records)
-elif st.session_state.screen == "record":
-    show_record()
+if st.session_state.screen == "landing":
+    show_landing()
 else:
-    show_home(records)
+    # 샘플 자료 안내는 기능 화면에서만 보여 준다
+    st.caption("샘플 자료로 보여 드립니다")
+
+    # 기능 화면에서만 사이드바에 첫 화면으로 돌아가는 버튼을 둔다
+    st.sidebar.button("← 첫 화면으로", use_container_width=True, on_click=go, args=("landing",))
+
+    if st.session_state.screen == "detail":
+        show_detail(records)
+    elif st.session_state.screen == "record":
+        show_record()
+    else:
+        show_home(records)
 
 show_chatbot()
