@@ -16,6 +16,8 @@ MEMO_TABLE = "client_memos"
 WORK_TABLE = "work_records"
 # 화면 3 입력 칸 6개에 대응하는 업무 기록 표의 열
 RECORD_FIELDS = ("task", "status", "next_step", "due_date", "file_location", "revision_note")
+# 화면 3 기존 기록 목록 상자의 높이(픽셀). 왼쪽 입력 칸 높이쯤으로 맞춘다
+RECORD_LIST_HEIGHT = 680
 # 오른쪽 아래 대화창에서 물은 말과 받은 답을 한 줄씩 남기는 표
 CHAT_LOG_TABLE = "chat_logs"
 CHAT_LOG_LIMIT = 20
@@ -77,17 +79,20 @@ def show_home(df):
 
     open_tasks = df[df["status"] != "완료"].sort_values("due_date")
 
-    with st.container(border=True):
+    # 왼쪽 좁은 열은 고객사 선택, 가운데 넓은 자리는 두 업무 목록을 좌우로 나란히 둔다
+    select_col, due_col, star_col = st.columns([1, 1.5, 1.5])
+
+    with due_col, st.container(border=True):
         st.subheader("마감일이 가까운 업무")
         for row in open_tasks.head(5).itertuples():
             task_row(row, d_day(row.due_date), f"due_{row.record_id}")
 
-    with st.container(border=True):
+    with star_col, st.container(border=True):
         st.subheader("중요 표시한 업무")
         for row in df[df["important"]].sort_values("due_date").itertuples():
             task_row(row, "★", f"star_{row.record_id}")
 
-    with st.container(border=True):
+    with select_col, st.container(border=True):
         st.subheader("확인할 고객사 선택")
         client = st.selectbox(
             "확인할 고객사 선택",
@@ -197,46 +202,63 @@ def show_detail(df):
     latest = latest_work(client, records.iloc[0])
     open_tasks = records[records["status"] != "완료"].sort_values("due_date")
 
-    with st.container(border=True):
-        st.markdown(f"**고객사명** {client}")
-        st.markdown(f"**진행상태** `{latest['status']}`")
+    # 맨 위 한 줄: 요약과 화면 이동 버튼
+    summary_col, nav_col = st.columns([3, 1])
+
+    with summary_col, st.container(border=True):
+        summary = f"**고객사명** {client} · **진행상태** `{latest['status']}`"
         if not open_tasks.empty:
             due = open_tasks.iloc[0]["due_date"]
-            st.markdown(f"**마감일** {due} ({d_day(due)})")
+            summary += f" · **마감일** {due} ({d_day(due)})"
+        st.markdown(summary)
 
-    with st.container(border=True):
-        st.subheader("① 최근 작업")
-        st.write(latest["task"])
-        st.caption(f"작성일 {latest['work_date']}")
+    with nav_col:
+        st.button(
+            "업무 기록 작성·수정",
+            use_container_width=True,
+            on_click=go,
+            args=("record", client),
+        )
+        st.caption("업무 기록 작성·수정 → 화면 3")
 
-    with st.container(border=True):
-        st.subheader("② 다음 할 일")
-        for row in open_tasks.itertuples():
-            st.write(f"☐ {row.next_step} (마감 {row.due_date})")
+        st.button("목록으로", use_container_width=True, on_click=go, args=("home",))
+        st.caption("목록으로 → 화면 1")
 
-    with st.container(border=True):
-        st.subheader("③ 파일 위치")
-        st.caption("오른쪽 위 복사 아이콘으로 경로를 복사합니다")
-        for row in records.itertuples():
-            st.code(row.file_location, language=None)
+    # 가운데는 탭 두 개, 오른쪽 열은 한 줄 메모
+    main_col, memo_col = st.columns([3, 1])
 
-    with st.container(border=True):
-        st.subheader("④ 수정내용")
-        for row in records.itertuples():
-            st.write(f"{row.work_date} · {row.revision_note}")
+    with main_col:
+        now_tab, history_tab = st.tabs(["지금 현황", "파일·수정 이력"])
 
-    show_memos(client)
+        with now_tab:
+            recent_col, next_col = st.columns(2)
 
-    st.button(
-        "업무 기록 작성·수정",
-        use_container_width=True,
-        on_click=go,
-        args=("record", client),
-    )
-    st.caption("업무 기록 작성·수정 → 화면 3")
+            with recent_col, st.container(border=True):
+                st.subheader("① 최근 작업")
+                st.write(latest["task"])
+                st.caption(f"작성일 {latest['work_date']}")
 
-    st.button("목록으로", use_container_width=True, on_click=go, args=("home",))
-    st.caption("목록으로 → 화면 1")
+            with next_col, st.container(border=True):
+                st.subheader("② 다음 할 일")
+                for row in open_tasks.itertuples():
+                    st.write(f"☐ {row.next_step} (마감 {row.due_date})")
+
+        with history_tab:
+            file_col, revision_col = st.columns(2)
+
+            with file_col, st.container(border=True):
+                st.subheader("③ 파일 위치")
+                st.caption("오른쪽 위 복사 아이콘으로 경로를 복사합니다")
+                for row in records.itertuples():
+                    st.code(row.file_location, language=None)
+
+            with revision_col, st.container(border=True):
+                st.subheader("④ 수정내용")
+                for row in records.itertuples():
+                    st.write(f"{row.work_date} · {row.revision_note}")
+
+    with memo_col:
+        show_memos(client)
 
 
 def pick_record(client, record):
@@ -286,25 +308,27 @@ def show_work_records(client):
         if not rows:
             st.caption("아직 남긴 업무 기록이 없습니다")
         picked = st.session_state.get("picked_record")
-        for raw in rows:
-            # 비어 있는 칸은 None 대신 "-"로 보여 준다
-            r = {k: "-" if v is None else v for k, v in raw.items()}
-            with st.container(border=True):
-                left, right = st.columns([6, 1])
-                left.markdown(f"**{r['work_date']}** · {r['task']} `{r['status']}`")
-                left.caption(f"다음 할 일 {r['next_step']} · 마감 {r['due_date']}")
-                left.caption(f"파일 위치 {r['file_location']}")
-                left.caption(f"수정내용 {r['revision_note']}")
-                right.button(
-                    "고르기",
-                    key=f"pick_{r['id']}",
-                    on_click=pick_record,
-                    # 입력 칸에는 "-"가 아니라 원래 값을 채운다
-                    args=(client, raw),
-                )
-                # 입력 칸은 목록보다 위에 있어 안 보일 수 있으니, 고른 항목 자리에서 알려 준다
-                if picked and picked["client"] == client and picked["id"] == raw["id"]:
-                    st.success("위의 입력 칸에 불러왔어요. 고친 뒤 저장을 누르세요")
+        # 목록이 길어도 화면이 늘어나지 않게, 왼쪽 입력 칸 높이쯤 되는 상자 안에서만 굴려 본다
+        with st.container(height=RECORD_LIST_HEIGHT, border=False):
+            for raw in rows:
+                # 비어 있는 칸은 None 대신 "-"로 보여 준다
+                r = {k: "-" if v is None else v for k, v in raw.items()}
+                with st.container(border=True):
+                    left, right = st.columns([6, 1])
+                    left.markdown(f"**{r['work_date']}** · {r['task']} `{r['status']}`")
+                    left.caption(f"다음 할 일 {r['next_step']} · 마감 {r['due_date']}")
+                    left.caption(f"파일 위치 {r['file_location']}")
+                    left.caption(f"수정내용 {r['revision_note']}")
+                    right.button(
+                        "고르기",
+                        key=f"pick_{r['id']}",
+                        on_click=pick_record,
+                        # 입력 칸에는 "-"가 아니라 원래 값을 채운다
+                        args=(client, raw),
+                    )
+                    # 고른 항목 자리에서 입력 칸에 불러왔다고 알려 준다
+                    if picked and picked["client"] == client and picked["id"] == raw["id"]:
+                        st.success("왼쪽 입력 칸에 불러왔어요. 고친 뒤 저장을 누르세요")
 
 
 def show_record_form(client):
@@ -315,6 +339,10 @@ def show_record_form(client):
         # 다른 고객사에서 골라 둔 기록은 보여 주지 않는다
         picked = st.session_state.get("picked_record")
         if picked and picked["client"] == client:
+            # 다른 화면에 다녀오면 입력 칸 값은 지워지고 고른 기록만 남는다.
+            # 그때는 입력 칸을 고른 기록으로 다시 채워, 안내와 입력 칸이 어긋나지 않게 한다
+            if any(f"rec_{field}" not in st.session_state for field in RECORD_FIELDS):
+                pick_record(client, picked)
             st.info(f"고른 기록: {picked['work_date']} · {picked['task']}")
 
         st.button("새로 쓰기", on_click=clear_record_form)
@@ -399,17 +427,26 @@ def show_record():
 
     client = st.session_state.client
 
-    with st.container(border=True):
+    # 맨 위: 고객사명과 화면 이동 버튼
+    name_col, nav_col = st.columns([3, 1])
+
+    with name_col, st.container(border=True):
         st.markdown(f"**고객사명** {client}")
 
-    show_record_form(client)
+    with nav_col:
+        st.button(
+            "고객사 현황으로", use_container_width=True, on_click=go, args=("detail", client)
+        )
+        st.caption("고객사 현황으로 → 화면 2")
 
-    show_work_records(client)
+    # 왼쪽 열은 입력 칸, 가운데 열은 기존 기록 목록
+    form_col, list_col = st.columns([2, 3])
 
-    st.button(
-        "고객사 현황으로", use_container_width=True, on_click=go, args=("detail", client)
-    )
-    st.caption("고객사 현황으로 → 화면 2")
+    with form_col:
+        show_record_form(client)
+
+    with list_col:
+        show_work_records(client)
 
 
 def ask_chatbot(api_key, messages):
@@ -587,6 +624,9 @@ def show_chatbot():
         with st.popover("✨", help="관리판 안내 챗봇"):
             chat_panel()
 
+
+# 열을 나란히 두려면 화면 너비를 넓게 쓴다
+st.set_page_config(layout="wide")
 
 st.caption("샘플 자료로 보여 드립니다")
 
