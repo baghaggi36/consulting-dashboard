@@ -27,6 +27,13 @@ CHAT_MODEL = "gemini-3.5-flash-lite"
 # 챗봇은 PRD.md만 읽고 사용법을 안내한다. 업무 기록은 넘기지 않는다(.claude/rules/scope.md 예외 항목).
 # AI에게 주는 고정 지시문은 이 글 파일에 있다.
 CHAT_RULES_FILE = Path(__file__).parent / "chatbot_rules.txt"
+# 화면에 보여 주기 전 답 점검: 정확히 세 줄, 300자 이하. 벗어나면 한 번 더 묻는다.
+CHAT_ANSWER_LINES = 3
+CHAT_ANSWER_MAX_CHARS = 300
+# 이 말로 시작하는 답은 세 줄 이하·300자 이하이면 통과시킨다.
+CHAT_NO_INFO_PREFIX = "PRD에는 그 내용이 없습니다"
+# 두 번 다 점검을 통과하지 못하면 답 대신 띄우는 글
+CHAT_RETRY_TEXT = "다시 시도해 주세요"
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -424,6 +431,27 @@ def ask_chatbot(api_key, messages):
     return response.text
 
 
+def answer_passes_check(answer):
+    """답이 정확히 세 줄이고 300자(줄바꿈 제외) 이하인지 본다. 빈 줄은 세지 않는다.
+    "PRD에는 그 내용이 없습니다"로 시작하는 답은 세 줄 이하이면 된다."""
+    text = (answer or "").strip()
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(text.replace("\n", "")) > CHAT_ANSWER_MAX_CHARS:
+        return False
+    if text.startswith(CHAT_NO_INFO_PREFIX):
+        return len(lines) <= CHAT_ANSWER_LINES
+    return len(lines) == CHAT_ANSWER_LINES
+
+
+def ask_chatbot_checked(api_key, messages):
+    """답을 점검해 벗어나면 한 번 더 묻고, 두 번 다 벗어나면 「다시 시도해 주세요」를 돌려준다."""
+    for _ in range(2):
+        answer = ask_chatbot(api_key, messages)
+        if answer_passes_check(answer):
+            return answer
+    return CHAT_RETRY_TEXT
+
+
 def save_chat_log(question, answer):
     """물은 말과 받은 답을 Supabase 대화 기록 표에 남긴다."""
     get_supabase().table(CHAT_LOG_TABLE).insert(
@@ -475,7 +503,7 @@ def chat_panel():
             role, avatar = ("user", None) if m["role"] == "user" else ("assistant", "✨")
             with st.chat_message(role, avatar=avatar):
                 if m["role"] == "model":
-                    st.caption("AI가 쓴 초안입니다")
+                    st.caption("AI가 쓴 초안입니다 · 확인하고 쓰세요")
                     # 마크다운은 줄바꿈 하나를 공백으로 합치므로, 문장마다 줄이 보이게 바꾼다.
                     st.markdown(m["text"].strip().replace("\n", "  \n"))
                 else:
@@ -499,7 +527,7 @@ def chat_panel():
             messages.append({"role": "user", "text": question.strip()})
             with st.spinner("답을 쓰는 중입니다..."):
                 try:
-                    answer = ask_chatbot(api_key, messages)
+                    answer = ask_chatbot_checked(api_key, messages)
                 except Exception as error:
                     messages.pop()
                     st.error(f"Gemini를 부르다 문제가 생겼습니다: {error}")
