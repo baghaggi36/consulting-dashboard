@@ -192,21 +192,17 @@ def show_memos(client):
 
 
 def latest_work(client, csv_latest):
-    """CSV 기록과 화면 3에서 Supabase에 저장한 기록 중 더 최근 것 하나의 작업일·작업내용·진행상태를 돌려준다.
-    화면 3에서 저장한 기록이 더 최근이면 그 기록의 다음 할 일·마감일도 돌려준다.
-    CSV가 더 최근이거나 그 칸이 비어 있으면 None을 돌려주어, 화면 2가 지금처럼 CSV 내용을 보여 주게 한다."""
+    """CSV 기록과 화면 3에서 Supabase에 저장한 기록 중 더 최근 것 하나의 작업일·작업내용·진행상태를 돌려준다."""
     latest = {
         "work_date": csv_latest.work_date,
         "task": csv_latest.task,
         "status": csv_latest.status,
-        "next_step": None,
-        "due_date": None,
     }
     try:
         rows = (
             get_supabase()
             .table(WORK_TABLE)
-            .select("work_date, task, status, next_step, due_date")
+            .select("work_date, task, status")
             .eq("client_name", client)
             .order("work_date", desc=True)
             # 같은 날 두 번 저장했으면 나중에 넣은 것을 고른다
@@ -229,12 +225,44 @@ def latest_work(client, csv_latest):
                 "task": saved["task"],
                 # 진행상태를 비우고 저장했으면 "-"로 보여 준다
                 "status": saved["status"] or "-",
-                "next_step": saved["next_step"] or None,
-                "due_date": (
-                    date.fromisoformat(saved["due_date"]) if saved["due_date"] else None
-                ),
             }
     return latest
+
+
+def saved_next_and_due(client):
+    """화면 3에서 Supabase에 저장한 이 고객사의 기록에서 화면 2의 다음 할 일과 마감일을 고른다.
+    다음 할 일은 다음 할 일이 적힌 기록 중 가장 최근 것, 마감일은 마감일이 적힌 기록 중 가장 최근 것을 쓴다.
+    해당 기록이 없으면 그 칸은 None이다. 저장한 기록이 하나도 없거나 불러오지 못하면 None을 돌려주어 CSV를 쓰게 한다."""
+    try:
+        rows = (
+            get_supabase()
+            .table(WORK_TABLE)
+            .select("next_step, due_date")
+            .eq("client_name", client)
+            .order("work_date", desc=True)
+            # 같은 날 두 번 저장했으면 나중에 넣은 것을 더 최근으로 본다
+            .order("created_at", desc=True)
+            .execute()
+            .data
+        )
+    except Exception as e:
+        st.error(f"화면 3에서 저장한 기록을 불러오지 못했습니다: {e}")
+        return None
+
+    if not rows:
+        return None
+    next_row = next((r for r in rows if (r["next_step"] or "").strip()), None)
+    due_row = next((r for r in rows if r["due_date"]), None)
+    return {
+        "next_step": next_row["next_step"] if next_row else None,
+        # 다음 할 일 옆 괄호에는 그 할 일이 적힌 기록의 마감일을 쓴다
+        "next_due": (
+            date.fromisoformat(next_row["due_date"])
+            if next_row and next_row["due_date"]
+            else None
+        ),
+        "due_date": date.fromisoformat(due_row["due_date"]) if due_row else None,
+    }
 
 
 def show_detail(df):
@@ -243,6 +271,8 @@ def show_detail(df):
     client = st.session_state.client
     records = df[df["client_name"] == client].sort_values("work_date", ascending=False)
     latest = latest_work(client, records.iloc[0])
+    # Supabase 기록이 하나라도 있으면 다음 할 일·마감일은 거기서만 고르고, 하나도 없으면 None이라 CSV를 쓴다
+    saved = saved_next_and_due(client)
     open_tasks = records[records["status"] != "완료"].sort_values("due_date")
 
     # 맨 위 한 줄: 요약과 화면 이동 버튼.
@@ -251,11 +281,13 @@ def show_detail(df):
 
     with summary_col, st.container(border=True, key="card_summary"):
         summary = f"**고객사명** {client} · **진행상태** `{latest['status']}`"
-        # 최신 기록의 마감일을 쓰고, 비어 있으면 지금처럼 CSV에서 가장 가까운 마감일을 쓴다
-        due = latest["due_date"]
-        if due is None and not open_tasks.empty:
+        if saved is not None:
+            # 마감일이 적힌 Supabase 기록 중 가장 최근 것, 없으면 "없음"
+            due = saved["due_date"]
+            summary += f" · **마감일** {f'{due} ({d_day(due)})' if due else '없음'}"
+        elif not open_tasks.empty:
+            # Supabase 기록이 하나도 없는 고객사만 지금처럼 CSV에서 가장 가까운 마감일을 쓴다
             due = open_tasks.iloc[0]["due_date"]
-        if due is not None:
             summary += f" · **마감일** {due} ({d_day(due)})"
         st.markdown(summary)
 
@@ -292,13 +324,17 @@ def show_detail(df):
 
             with next_col, st.container(border=True, key="card_next"):
                 st.subheader("② 다음 할 일")
-                # 최신 기록의 다음 할 일을 쓰고, 비어 있으면 지금처럼 CSV의 남은 할 일을 모두 보여 준다
-                if latest["next_step"]:
-                    line = f"☐ {latest['next_step']}"
-                    if latest["due_date"]:
-                        line += f" (마감 {latest['due_date']})"
-                    st.write(line)
+                if saved is not None:
+                    # 다음 할 일이 적힌 Supabase 기록 중 가장 최근 것, 없으면 "없음"
+                    if saved["next_step"]:
+                        line = f"☐ {saved['next_step']}"
+                        if saved["next_due"]:
+                            line += f" (마감 {saved['next_due']})"
+                        st.write(line)
+                    else:
+                        st.write("없음")
                 else:
+                    # Supabase 기록이 하나도 없는 고객사만 지금처럼 CSV의 남은 할 일을 모두 보여 준다
                     for row in open_tasks.itertuples():
                         st.write(f"☐ {row.next_step} (마감 {row.due_date})")
 
@@ -340,6 +376,42 @@ def clear_record_form():
         st.session_state[f"rec_{field}"] = None if field == "due_date" else ""
 
 
+def ask_delete_record(record_id):
+    """「삭제」를 누른 기록을 기억해 두어, 그 자리에서 한 번 더 묻게 한다."""
+    st.session_state.deleting_record_id = record_id
+    st.session_state.pop("delete_message", None)
+
+
+def cancel_delete_record():
+    """지우기를 그만두고 묻는 글을 감춘다."""
+    st.session_state.pop("deleting_record_id", None)
+
+
+def delete_record(record_id):
+    """기존 기록 하나를 Supabase 업무 기록 표에서 지운다. 고른 기록이었다면 입력 칸도 비운다.
+    결과는 다시 그린 목록 위에 보여 주도록 남겨 둔다."""
+    st.session_state.pop("deleting_record_id", None)
+    try:
+        deleted = (
+            get_supabase().table(WORK_TABLE).delete().eq("id", record_id).execute().data
+        )
+    except Exception as e:
+        st.session_state.delete_message = ("error", f"기록을 지우지 못했습니다: {e}")
+        return
+    # 지우기 허용이 없으면 오류 없이 아무 줄도 지워지지 않는다
+    if not deleted:
+        st.session_state.delete_message = (
+            "error",
+            "기록을 지우지 못했습니다: 지워진 기록이 없습니다."
+            " Supabase work_records 표의 지우기(DELETE) 허용을 확인해 주세요",
+        )
+        return
+    picked = st.session_state.get("picked_record")
+    if picked and picked["id"] == record_id:
+        clear_record_form()
+    st.session_state.delete_message = ("success", "기록을 지웠습니다")
+
+
 def show_work_records(client):
     """화면 3에 이 고객사의 기존 업무 기록을 최근 것부터 보여 준다."""
     with st.container(border=True, key="card_records"):
@@ -364,9 +436,16 @@ def show_work_records(client):
             st.error(f"기존 기록을 불러오지 못했습니다: {e}")
             return
 
+        # 바로 앞에서 지운 결과를 한 번만 보여 준다
+        message = st.session_state.pop("delete_message", None)
+        if message:
+            kind, text = message
+            (st.success if kind == "success" else st.error)(text)
+
         if not rows:
             st.caption("아직 남긴 업무 기록이 없습니다")
         picked = st.session_state.get("picked_record")
+        deleting_id = st.session_state.get("deleting_record_id")
         # 목록이 길어도 화면이 늘어나지 않게, 왼쪽 입력 칸 높이쯤 되는 상자 안에서만 굴려 본다
         with st.container(height=RECORD_LIST_HEIGHT, border=False):
             for raw in rows:
@@ -385,9 +464,33 @@ def show_work_records(client):
                         # 입력 칸에는 "-"가 아니라 원래 값을 채운다
                         args=(client, raw),
                     )
+                    # 이 목록은 화면 3에서 저장한 Supabase 기록만 보여 주므로, CSV 샘플 기록에는 삭제 버튼이 붙지 않는다
+                    right.button(
+                        "삭제",
+                        key=f"delete_{r['id']}",
+                        on_click=ask_delete_record,
+                        args=(raw["id"],),
+                    )
                     # 고른 항목 자리에서 입력 칸에 불러왔다고 알려 준다
                     if picked and picked["client"] == client and picked["id"] == raw["id"]:
                         st.success("왼쪽 입력 칸에 불러왔어요. 고친 뒤 저장을 누르세요")
+                    # 「삭제」를 누른 기록이면 바로 지우지 않고 한 번 더 묻는다
+                    if deleting_id == raw["id"]:
+                        st.warning("이 기록을 지울까요? 지우면 되돌릴 수 없어요")
+                        confirm_col, cancel_col = st.columns(2)
+                        confirm_col.button(
+                            "지우기",
+                            key=f"confirm_delete_{r['id']}",
+                            use_container_width=True,
+                            on_click=delete_record,
+                            args=(raw["id"],),
+                        )
+                        cancel_col.button(
+                            "취소",
+                            key=f"cancel_delete_{r['id']}",
+                            use_container_width=True,
+                            on_click=cancel_delete_record,
+                        )
 
 
 def show_record_form(client):
