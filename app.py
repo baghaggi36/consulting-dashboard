@@ -16,6 +16,10 @@ PRD_FILE = Path(__file__).parent / "PRD.md"
 MEMO_TABLE = "client_memos"
 # 화면 3에서 쓰고 읽는 업무 기록 표
 WORK_TABLE = "work_records"
+# 화면 1에서 추가한 고객사를 담는 표
+CLIENT_TABLE = "clients"
+# 기록이 하나도 없는 고객사(새로 추가한 고객사 등)의 화면 2 칸에 보여 줄 글
+NO_RECORD_TEXT = "아직 기록이 없습니다"
 # 화면 3 입력 칸 6개에 대응하는 업무 기록 표의 열
 RECORD_FIELDS = ("task", "status", "next_step", "due_date", "file_location", "revision_note")
 # 화면 3 기존 기록 목록 상자의 높이(픽셀). 왼쪽 입력 칸 높이쯤으로 맞춘다
@@ -108,15 +112,23 @@ def show_home(df):
     select_col, due_col, star_col = st.columns([1, 1.5, 1.5])
 
     with due_col, st.container(border=True, key="card_due"):
-        st.subheader("마감일이 가까운 업무")
+        st.subheader("마감 챙길 업무")
         # 마감 지난 업무(오래된 순)를 위에, 아직 남은 업무(오늘 마감 포함, 가까운 순)를 아래에 묶음마다 몇 개씩 보여 준다.
-        # open_tasks가 마감일 순이라 두 묶음 모두 이미 원하는 순서다
+        # open_tasks가 마감일 순이라 두 묶음 모두 이미 원하는 순서다. 빈 묶음은 소제목째 그리지 않는다
         is_overdue = open_tasks["due_date"] < date.today()
-        groups = [g for g in (open_tasks[is_overdue], open_tasks[~is_overdue]) if not g.empty]
-        for i, group in enumerate(groups):
+        groups = [
+            (title, g)
+            for title, g in (
+                ("🔴 마감 지남", open_tasks[is_overdue]),
+                ("⏳ 다가오는 마감", open_tasks[~is_overdue]),
+            )
+            if not g.empty
+        ]
+        for i, (title, group) in enumerate(groups):
             # 두 묶음이 한눈에 나뉘도록 사이에 가는 줄을 긋는다
             if i > 0:
                 st.divider()
+            st.markdown(f"**{title}**")
             for row in group.head(DUE_GROUP_LIMIT).itertuples():
                 badge, label = due_mark(row.due_date)
                 task_row(row, label, f"due_{row.record_id}", badge)
@@ -131,10 +143,13 @@ def show_home(df):
 
     with select_col, st.container(border=True, key="card_select"):
         st.subheader("확인할 고객사 선택")
+        names = client_names(df)
+        # 처음에는 아무 고객사도 고르지 않은 상태로 두고, 고객사를 추가하면 그 고객사를 골라 둔다
+        st.session_state.setdefault("home_client", None)
         client = st.selectbox(
             "확인할 고객사 선택",
-            options=list(df["client_name"].unique()),
-            index=None,
+            options=names,
+            key="home_client",
             placeholder="고객사를 선택하세요",
             label_visibility="collapsed",
         )
@@ -145,6 +160,59 @@ def show_home(df):
                 go("detail", client)
                 st.rerun()
         st.caption("선택 후 확인 → 화면 2로 이동")
+
+        st.text_input("새 고객사 이름", key="new_client_name", placeholder="예: 하늘상사")
+        st.button("고객사 추가", use_container_width=True, on_click=add_client, args=(names,))
+        # 바로 앞에서 추가한 결과를 한 번만 보여 준다
+        message = st.session_state.pop("client_add_message", None)
+        if message:
+            kind, text = message
+            {"success": st.success, "warning": st.warning}.get(kind, st.error)(text)
+
+
+def client_names(df):
+    """화면 1 선택 목록에 보일 고객사 이름. CSV 고객사 뒤에 clients 표에 추가한 고객사를 겹치지 않게 붙인다."""
+    names = list(df["client_name"].unique())
+    try:
+        rows = (
+            get_supabase()
+            .table(CLIENT_TABLE)
+            .select("client_name")
+            .order("created_at")
+            .execute()
+            .data
+        )
+    except Exception as e:
+        st.error(f"추가한 고객사를 불러오지 못했습니다: {e}")
+        return names
+    for r in rows:
+        if r["client_name"] not in names:
+            names.append(r["client_name"])
+    return names
+
+
+def add_client(existing):
+    """「새 고객사 이름」 칸의 이름을 clients 표에 넣고, 선택 칸에서 그 고객사를 골라 둔다.
+    비어 있거나 이미 있는 이름이면 넣지 않는다. 결과 안내는 다시 그린 화면 1에 보여 주도록 남겨 둔다."""
+    name = st.session_state.get("new_client_name", "").strip()
+    if not name:
+        st.session_state.client_add_message = ("warning", "추가할 고객사 이름을 먼저 입력해 주세요")
+        return
+    if name in existing:
+        st.session_state.client_add_message = ("warning", f"이미 있는 고객사입니다: {name}")
+        return
+    try:
+        get_supabase().table(CLIENT_TABLE).insert({"client_name": name}).execute()
+    except Exception as e:
+        # 그사이 같은 이름이 들어갔으면, 이름이 겹치지 않게 만든 표가 거절한다
+        if "23505" in str(e) or "duplicate" in str(e).lower():
+            st.session_state.client_add_message = ("warning", f"이미 있는 고객사입니다: {name}")
+        else:
+            st.session_state.client_add_message = ("error", f"고객사를 추가하지 못했습니다: {e}")
+        return
+    st.session_state.new_client_name = ""
+    st.session_state.home_client = name
+    st.session_state.client_add_message = ("success", "고객사를 추가했습니다")
 
 
 def show_memos(client):
@@ -194,12 +262,15 @@ def show_memos(client):
 
 
 def latest_work(client, csv_latest):
-    """CSV 기록과 화면 3에서 Supabase에 저장한 기록 중 더 최근 것 하나의 작업일·작업내용·진행상태를 돌려준다."""
-    latest = {
-        "work_date": csv_latest.work_date,
-        "task": csv_latest.task,
-        "status": csv_latest.status,
-    }
+    """CSV 기록과 화면 3에서 Supabase에 저장한 기록 중 더 최근 것 하나의 작업일·작업내용·진행상태를 돌려준다.
+    CSV 기록이 없으면 csv_latest는 None이고, 둘 다 없으면 None을 돌려준다."""
+    latest = None
+    if csv_latest is not None:
+        latest = {
+            "work_date": csv_latest.work_date,
+            "task": csv_latest.task,
+            "status": csv_latest.status,
+        }
     try:
         rows = (
             get_supabase()
@@ -221,7 +292,7 @@ def latest_work(client, csv_latest):
         saved = rows[0]
         saved_date = date.fromisoformat(saved["work_date"])
         # 작업일이 같으면 화면 3에서 저장한 기록을 더 최근 것으로 본다
-        if saved_date >= latest["work_date"]:
+        if latest is None or saved_date >= latest["work_date"]:
             latest = {
                 "work_date": saved_date,
                 "task": saved["task"],
@@ -268,7 +339,8 @@ def show_detail(df):
 
     client = st.session_state.client
     records = df[df["client_name"] == client].sort_values("work_date", ascending=False)
-    latest = latest_work(client, records.iloc[0])
+    # 화면 1에서 새로 추가한 고객사는 CSV 기록이 없다
+    latest = latest_work(client, None if records.empty else records.iloc[0])
     # Supabase 기록이 하나라도 있으면 다음 할 일·마감일은 거기서만 고르고, 하나도 없으면 None이라 CSV를 쓴다
     saved = saved_detail(client)
     open_tasks = records[records["status"] != "완료"].sort_values("due_date")
@@ -278,7 +350,8 @@ def show_detail(df):
     summary_col, nav_col = st.columns([2, 1], vertical_alignment="center")
 
     with summary_col, st.container(border=True, key="card_summary"):
-        summary = f"**고객사명** {client} · **진행상태** `{latest['status']}`"
+        status = f"`{latest['status']}`" if latest else NO_RECORD_TEXT
+        summary = f"**고객사명** {client} · **진행상태** {status}"
         if saved is not None:
             # 마감일이 적힌 Supabase 기록 중 가장 최근 것, 없으면 "없음"
             due = saved["due_date"]
@@ -287,6 +360,8 @@ def show_detail(df):
             # Supabase 기록이 하나도 없는 고객사만 지금처럼 CSV에서 가장 가까운 마감일을 쓴다
             due = open_tasks.iloc[0]["due_date"]
             summary += f" · **마감일** {due} ({d_day(due)})"
+        elif records.empty:
+            summary += f" · **마감일** {NO_RECORD_TEXT}"
         st.markdown(summary)
 
     with nav_col:
@@ -321,10 +396,12 @@ def show_detail(df):
                     # Supabase 기록을 최근 순으로 몇 개까지, 한 줄에 "날짜 · 작업내용 · 진행상태"
                     for r in saved["recent"]:
                         st.write(f"{r['work_date']} · {r['task']} · {r['status'] or '-'}")
-                else:
+                elif latest:
                     # Supabase 기록이 하나도 없는 고객사만 지금처럼 CSV의 가장 최근 작업을 보여 준다
                     st.write(latest["task"])
                     st.caption(f"작성일 {latest['work_date']}")
+                else:
+                    st.write(NO_RECORD_TEXT)
 
             with next_col, st.container(border=True, key="card_next"):
                 st.subheader("② 다음 할 일")
@@ -336,6 +413,8 @@ def show_detail(df):
                         st.write(f"☐ {r['next_step']}{due}")
                     if not saved["next"]:
                         st.write("없음")
+                elif records.empty:
+                    st.write(NO_RECORD_TEXT)
                 else:
                     # Supabase 기록이 하나도 없는 고객사만 지금처럼 CSV의 남은 할 일을 모두 보여 준다
                     for row in open_tasks.itertuples():
@@ -349,11 +428,15 @@ def show_detail(df):
                 st.caption("오른쪽 위 복사 아이콘으로 경로를 복사합니다")
                 for row in records.itertuples():
                     st.code(row.file_location, language=None)
+                if records.empty:
+                    st.write(NO_RECORD_TEXT)
 
             with revision_col, st.container(border=True, key="card_revision"):
                 st.subheader("④ 수정내용")
                 for row in records.itertuples():
                     st.write(f"{row.work_date} · {row.revision_note}")
+                if records.empty:
+                    st.write(NO_RECORD_TEXT)
 
     with memo_col:
         show_memos(client)
