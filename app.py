@@ -24,6 +24,8 @@ RECORD_LIST_HEIGHT = 680
 LANDING_BG_OVERLAY_OPACITY = 0.45
 # 첫 화면 유리 판의 흰색 진하기. 0이면 투명, 1이면 꽉 찬 흰색
 LANDING_PANEL_OPACITY = 0.25
+# 화면 1·2·3 배경 사진 위에 덮는 연한 하늘색(#F0F9FF)의 진하기. 첫 화면 것과 따로 둔다
+FEATURE_BG_OVERLAY_OPACITY = 0.55
 # 오른쪽 아래 대화창에서 물은 말과 받은 답을 한 줄씩 남기는 표
 CHAT_LOG_TABLE = "chat_logs"
 CHAT_LOG_LIMIT = 20
@@ -81,24 +83,24 @@ def task_row(row, label, key):
 
 
 def show_home(df):
-    st.title("화면 1 · 첫 화면")
+    st.title("화면 1 · 오늘의 업무")
 
     open_tasks = df[df["status"] != "완료"].sort_values("due_date")
 
     # 왼쪽 좁은 열은 고객사 선택, 가운데 넓은 자리는 두 업무 목록을 좌우로 나란히 둔다
     select_col, due_col, star_col = st.columns([1, 1.5, 1.5])
 
-    with due_col, st.container(border=True):
+    with due_col, st.container(border=True, key="card_due"):
         st.subheader("마감일이 가까운 업무")
         for row in open_tasks.head(5).itertuples():
             task_row(row, d_day(row.due_date), f"due_{row.record_id}")
 
-    with star_col, st.container(border=True):
+    with star_col, st.container(border=True, key="card_star"):
         st.subheader("중요 표시한 업무")
         for row in df[df["important"]].sort_values("due_date").itertuples():
             task_row(row, "★", f"star_{row.record_id}")
 
-    with select_col, st.container(border=True):
+    with select_col, st.container(border=True, key="card_select"):
         st.subheader("확인할 고객사 선택")
         client = st.selectbox(
             "확인할 고객사 선택",
@@ -117,7 +119,7 @@ def show_home(df):
 
 
 def show_memos(client):
-    with st.container(border=True):
+    with st.container(border=True, key="card_memo"):
         st.subheader("⑤ 한 줄 메모")
 
         with st.form("memo_form", clear_on_submit=True):
@@ -212,7 +214,7 @@ def show_detail(df):
     # 버튼 두 개를 나란히 두어 이 줄이 높아지지 않게 하고, 요약과 가운데를 맞춘다
     summary_col, nav_col = st.columns([2, 1], vertical_alignment="center")
 
-    with summary_col, st.container(border=True):
+    with summary_col, st.container(border=True, key="card_summary"):
         summary = f"**고객사명** {client} · **진행상태** `{latest['status']}`"
         if not open_tasks.empty:
             due = open_tasks.iloc[0]["due_date"]
@@ -245,12 +247,12 @@ def show_detail(df):
         with now_tab:
             recent_col, next_col = st.columns(2)
 
-            with recent_col, st.container(border=True):
+            with recent_col, st.container(border=True, key="card_recent"):
                 st.subheader("① 최근 작업")
                 st.write(latest["task"])
                 st.caption(f"작성일 {latest['work_date']}")
 
-            with next_col, st.container(border=True):
+            with next_col, st.container(border=True, key="card_next"):
                 st.subheader("② 다음 할 일")
                 for row in open_tasks.itertuples():
                     st.write(f"☐ {row.next_step} (마감 {row.due_date})")
@@ -258,13 +260,13 @@ def show_detail(df):
         with history_tab:
             file_col, revision_col = st.columns(2)
 
-            with file_col, st.container(border=True):
+            with file_col, st.container(border=True, key="card_file"):
                 st.subheader("③ 파일 위치")
                 st.caption("오른쪽 위 복사 아이콘으로 경로를 복사합니다")
                 for row in records.itertuples():
                     st.code(row.file_location, language=None)
 
-            with revision_col, st.container(border=True):
+            with revision_col, st.container(border=True, key="card_revision"):
                 st.subheader("④ 수정내용")
                 for row in records.itertuples():
                     st.write(f"{row.work_date} · {row.revision_note}")
@@ -295,7 +297,7 @@ def clear_record_form():
 
 def show_work_records(client):
     """화면 3에 이 고객사의 기존 업무 기록을 최근 것부터 보여 준다."""
-    with st.container(border=True):
+    with st.container(border=True, key="card_records"):
         st.subheader("기존 기록 목록")
 
         try:
@@ -345,7 +347,7 @@ def show_work_records(client):
 
 def show_record_form(client):
     """화면 3의 업무 기록 입력 칸 6개와 저장 버튼. 저장하면 고른 기록은 바꾸고, 아니면 Supabase 업무 기록 표에 새로 넣는다."""
-    with st.container(border=True):
+    with st.container(border=True, key="card_record_form"):
         st.subheader("업무 기록 입력")
 
         # 다른 고객사에서 골라 둔 기록은 보여 주지 않는다
@@ -442,7 +444,7 @@ def show_record():
     # 맨 위: 고객사명과 화면 이동 버튼
     name_col, nav_col = st.columns([3, 1], vertical_alignment="center")
 
-    with name_col, st.container(border=True):
+    with name_col, st.container(border=True, key="card_client_name"):
         st.markdown(f"**고객사명** {client}")
 
     with nav_col:
@@ -869,6 +871,32 @@ st.session_state.setdefault("screen", "landing")
 if st.session_state.screen == "landing":
     show_landing()
 else:
+    # 화면 1·2·3 배경에도 첫 화면과 같은 사진을 깔고, 연한 하늘색을 FEATURE_BG_OVERLAY_OPACITY만큼 덮어 은은하게 보이게 한다.
+    # 카드(이름표가 card_로 시작하는 칸)는 흰 바탕으로 두어 업무 글씨가 잘 읽히게 한다
+    feature_overlay = f"rgba(240, 249, 255, {FEATURE_BG_OVERLAY_OPACITY})"
+    st.html(
+        f"""
+        <style>
+        [data-testid="stApp"] {{
+            background-color: #F0F9FF;
+            background-image:
+                linear-gradient({feature_overlay}, {feature_overlay}),
+                url("{image_data_url(str(LANDING_BG_FILE))}");
+            background-size: cover;
+            background-position: center top;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+        }}
+        [data-testid="stHeader"] {{
+            background: transparent;
+        }}
+        [data-testid="stMain"] [class*="st-key-card_"] {{
+            background: #FFFFFF;
+        }}
+        </style>
+        """
+    )
+
     # 기능 화면 제목(화면 1·2·3)을 왼쪽에 작고 단정하게 보이게 한다. 글자는 그대로 둔다
     st.html(
         """
