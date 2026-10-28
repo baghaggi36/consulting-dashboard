@@ -26,6 +26,8 @@ LANDING_BG_OVERLAY_OPACITY = 0.45
 LANDING_PANEL_OPACITY = 0.25
 # 화면 1·2·3 배경 사진 위에 덮는 연한 하늘색(#F0F9FF)의 진하기. 첫 화면 것과 따로 둔다
 FEATURE_BG_OVERLAY_OPACITY = 0.55
+# 화면 1 「마감일이 가까운 업무」에서 마감 지난 업무와 아직 남은 업무를 묶음마다 몇 개까지 보여 줄지
+DUE_GROUP_LIMIT = 3
 # 오른쪽 아래 대화창에서 물은 말과 받은 답을 한 줄씩 남기는 표
 CHAT_LOG_TABLE = "chat_logs"
 CHAT_LOG_LIMIT = 20
@@ -69,15 +71,28 @@ def d_day(due):
     return f"D-{days}" if days > 0 else f"D+{-days}"
 
 
+def due_mark(due):
+    """화면 1 「마감일이 가까운 업무」에 붙일 표시와 날짜 글을 돌려준다.
+    마감이 지났으면 빨간 「마감 지남」과 "19일 지남", 오늘이면 주황 「오늘 마감」, 아직 남았으면 "D-3"."""
+    days = (due - date.today()).days
+    if days < 0:
+        return ":red-badge[마감 지남]", f"{-days}일 지남"
+    if days == 0:
+        return ":orange-badge[오늘 마감]", ""
+    return "", f"D-{days}"
+
+
 def go(screen, client=None):
     st.session_state.screen = screen
     if client is not None:
         st.session_state.client = client
 
 
-def task_row(row, label, key):
+def task_row(row, label, key, badge=""):
     left, right = st.columns([6, 1])
-    left.markdown(f"**{label}** {row.client_name} · {row.next_step}")
+    # 표시(badge)가 있으면 맨 앞에 두고, 날짜 글(label)이 비었으면 굵은 글씨를 빼고 쓴다
+    head = " ".join(part for part in (badge, f"**{label}**" if label else "") if part)
+    left.markdown(f"{head} {row.client_name} · {row.next_step}")
     left.caption(f"마감 {row.due_date} · {row.status}")
     right.button(">", key=key, on_click=go, args=("detail", row.client_name))
 
@@ -92,8 +107,20 @@ def show_home(df):
 
     with due_col, st.container(border=True, key="card_due"):
         st.subheader("마감일이 가까운 업무")
-        for row in open_tasks.head(5).itertuples():
-            task_row(row, d_day(row.due_date), f"due_{row.record_id}")
+        # 마감 지난 업무(오래된 순)를 위에, 아직 남은 업무(오늘 마감 포함, 가까운 순)를 아래에 묶음마다 몇 개씩 보여 준다.
+        # open_tasks가 마감일 순이라 두 묶음 모두 이미 원하는 순서다
+        is_overdue = open_tasks["due_date"] < date.today()
+        groups = [g for g in (open_tasks[is_overdue], open_tasks[~is_overdue]) if not g.empty]
+        for i, group in enumerate(groups):
+            # 두 묶음이 한눈에 나뉘도록 사이에 가는 줄을 긋는다
+            if i > 0:
+                st.divider()
+            for row in group.head(DUE_GROUP_LIMIT).itertuples():
+                badge, label = due_mark(row.due_date)
+                task_row(row, label, f"due_{row.record_id}", badge)
+            hidden = len(group) - DUE_GROUP_LIMIT
+            if hidden > 0:
+                st.caption(f"외 {hidden}건 더")
 
     with star_col, st.container(border=True, key="card_star"):
         st.subheader("중요 표시한 업무")
