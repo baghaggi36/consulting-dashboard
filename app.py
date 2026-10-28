@@ -1,6 +1,8 @@
+import base64
 import os
 from datetime import date
 from pathlib import Path
+from urllib.parse import quote
 
 import pandas as pd
 import streamlit as st
@@ -18,6 +20,10 @@ WORK_TABLE = "work_records"
 RECORD_FIELDS = ("task", "status", "next_step", "due_date", "file_location", "revision_note")
 # 화면 3 기존 기록 목록 상자의 높이(픽셀). 왼쪽 입력 칸 높이쯤으로 맞춘다
 RECORD_LIST_HEIGHT = 680
+# 첫 화면 배경 사진 위에 덮는 연한 하늘색(#F0F9FF)의 진하기. 0이면 사진 그대로, 1이면 사진이 안 보인다
+LANDING_BG_OVERLAY_OPACITY = 0.45
+# 첫 화면 유리 판의 흰색 진하기. 0이면 투명, 1이면 꽉 찬 흰색
+LANDING_PANEL_OPACITY = 0.25
 # 오른쪽 아래 대화창에서 물은 말과 받은 답을 한 줄씩 남기는 표
 CHAT_LOG_TABLE = "chat_logs"
 CHAT_LOG_LIMIT = 20
@@ -455,6 +461,49 @@ def show_record():
         show_work_records(client)
 
 
+# 첫 화면 아이콘 세 개의 선 그림(24×24 칸 기준). 바깥 글꼴이나 인터넷에서 불러오지 않는다
+LANDING_ICONS = {
+    # 고객사 현황: 건물
+    "building": (
+        '<rect x="4" y="3" width="16" height="18" rx="2"/>'
+        '<path d="M10 21v-4h4v4"/>'
+        '<path d="M8 7h2M14 7h2M8 11h2M14 11h2"/>'
+    ),
+    # 업무 기록: 연필
+    "pencil": (
+        '<path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>'
+        '<path d="M14.5 5.5l3 3"/>'
+    ),
+    # 마감 관리: 시계
+    "clock": (
+        '<circle cx="12" cy="12" r="9"/>'
+        '<path d="M12 7v5l3 2"/>'
+    ),
+}
+
+
+# 첫 화면 배경 사진. 원본(autumn_sky.jpg.jpg)을 가로 1920픽셀로 줄인 복사본을 쓴다
+LANDING_BG_FILE = Path(__file__).parent / "assets" / "autumn_sky.jpg"
+
+
+@st.cache_data
+def image_data_url(path):
+    """사진 파일을 꾸밈 설정에 바로 넣을 수 있는 data URL로 만든다. 한 번 만든 것은 다시 쓴다."""
+    return "data:image/jpeg;base64," + base64.b64encode(Path(path).read_bytes()).decode()
+
+
+def line_icon_url(shapes):
+    """선 그림을 강조색 SVG로 감싸, 꾸밈 설정에 바로 넣을 수 있는 data URL로 만든다.
+    st.html은 <svg> 태그를 지우므로 그림을 이렇게 넣는다."""
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"'
+        ' stroke="#0284C7" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">'
+        + shapes
+        + "</svg>"
+    )
+    return "data:image/svg+xml," + quote(svg)
+
+
 def show_landing():
     """서비스를 소개하는 첫 화면. 「시작하기」를 누르면 화면 1로 간다.
     색은 이 화면을 그릴 때만 넣으므로 기능 화면에는 퍼지지 않는다."""
@@ -465,9 +514,25 @@ def show_landing():
             background: #F0F9FF;
             color: #1E293B;
         }
+        /* 배경 사진의 하늘이 위에서부터 보이도록 맨 위 머리줄을 투명하게 한다 */
+        [data-testid="stHeader"] {
+            background: transparent;
+        }
+        /* 제목·한 줄 소개·아이콘·「시작하기」를 올리는 유리 판.
+           흰색 진하기는 아래 배경 사진 꾸밈에서 LANDING_PANEL_OPACITY로 넣는다 */
+        .st-key-landing_panel {
+            max-width: 760px;
+            margin: 40px auto;
+            padding: 40px 32px;
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            border-radius: 20px;
+            box-shadow: 0 8px 32px rgba(30, 41, 59, 0.15);
+            -webkit-backdrop-filter: blur(10px);
+            backdrop-filter: blur(10px);
+        }
         .landing {
             max-width: 960px;
-            margin: 48px auto 32px;
+            margin: 0 auto 32px;
             text-align: center;
             color: #1E293B;
         }
@@ -486,28 +551,49 @@ def show_landing():
             margin: 0 auto 40px;
             max-width: 720px;
         }
-        .landing .jobs {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-            gap: 16px;
-            text-align: left;
+        /* 하는 일 세 가지: 선 모양 아이콘을 가로로 나란히 두고 아래에 이름만 쓴다 */
+        .landing .icons {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 48px;
         }
-        .landing .job {
+        .landing .icon {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            width: 120px;
+        }
+        .landing .icon .circle {
+            width: 88px;
+            height: 88px;
+            border-radius: 50%;
             background: #FFFFFF;
-            border-top: 4px solid #0284C7;
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 2px 8px rgba(30, 41, 59, 0.08);
+            border: 1px solid #BAE6FD;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
-        .landing .job b {
+        .landing .glyph {
             display: block;
-            font-size: 18px;
-            color: #0284C7;
-            margin-bottom: 8px;
+            width: 40px;
+            height: 40px;
+            background-position: center;
+            background-size: contain;
+            background-repeat: no-repeat;
         }
-        .landing .job p {
+        .landing .icon p {
             margin: 0;
-            line-height: 1.6;
+            font-size: 16px;
+            font-weight: 600;
+            color: #1E293B;
+        }
+        /* 「시작하기」 버튼은 아이콘 세 개가 놓인 폭(120px × 3 + 간격 48px × 2)에 맞춰 가운데 둔다 */
+        .st-key-start {
+            width: 456px;
+            max-width: 100%;
+            margin: 0 auto;
         }
         .st-key-start button {
             background: #0284C7;
@@ -530,36 +616,71 @@ def show_landing():
         @media (max-width: 640px) {
             .landing h1 { font-size: 34px; }
             .landing .intro { font-size: 17px; }
+            .landing .icons { gap: 24px; }
+            .landing .icon { width: 90px; }
+            .st-key-start { width: 318px; }
+            .st-key-landing_panel { margin: 16px auto; padding: 24px 16px; }
         }
         </style>
+        """
+    )
+
+    # 배경 사진은 이 저장소의 파일을 꾸밈 설정에 직접 넣는다(바깥 인터넷에서 불러오지 않는다).
+    # 화면 전체를 덮고, 하늘이 보이도록 위쪽에 맞춘다.
+    # 그 위에 연한 하늘색을 반투명하게 덮어 사진이 은은하게 비치게 한다
+    overlay = f"rgba(240, 249, 255, {LANDING_BG_OVERLAY_OPACITY})"
+    st.html(
+        f"""
+        <style>
+        [data-testid="stApp"] {{
+            background-image:
+                linear-gradient({overlay}, {overlay}),
+                url("{image_data_url(str(LANDING_BG_FILE))}");
+            background-size: cover;
+            background-position: center top;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+        }}
+        .st-key-landing_panel {{
+            background: rgba(255, 255, 255, {LANDING_PANEL_OPACITY});
+        }}
+        </style>
+        """
+    )
+
+    # 아이콘 그림은 꾸밈 설정의 배경 그림으로 넣는다
+    icon_css = "".join(
+        f'.landing .glyph-{name} {{ background-image: url("{line_icon_url(shapes)}"); }}'
+        for name, shapes in LANDING_ICONS.items()
+    )
+    st.html(f"<style>{icon_css}</style>")
+
+    with st.container(key="landing_panel"):
+        st.html(
+            """
         <div class="landing">
             <h1>📋 <span>개인용</span> 관리판</h1>
-            <p class="intro">
-                여러 고객사를 혼자 관리하는 컨설턴트가 고객사를 고르면
-                최근 작업·다음 할 일·마감일·파일 위치를 한 화면에서 보고,
-                폴더를 뒤지지 않고 업무를 바로 이어 가는 관리판입니다.
-            </p>
-            <div class="jobs">
-                <div class="job">
-                    <b>고객사 현황을 한 화면에</b>
-                    <p>고객사를 고르면 최근 작업·진행상태·다음 할 일·마감일·파일 위치·주요 수정내용이 한 번에 나옵니다.</p>
+            <p class="intro">여러 고객사 업무를 한 화면에</p>
+            <div class="icons">
+                <div class="icon">
+                    <div class="circle"><span class="glyph glyph-building"></span></div>
+                    <p>고객사 현황</p>
                 </div>
-                <div class="job">
-                    <b>업무 기록 남기고 고치기</b>
-                    <p>오늘 한 일을 적어 저장하면, 관리판을 다시 열어도 그대로 남아 이어서 고칠 수 있습니다.</p>
+                <div class="icon">
+                    <div class="circle"><span class="glyph glyph-pencil"></span></div>
+                    <p>업무 기록</p>
                 </div>
-                <div class="job">
-                    <b>급한 일과 중요한 일 먼저</b>
-                    <p>마감일이 가까운 업무와 직접 중요 표시한 업무가 화면 1 위쪽에 먼저 보입니다.</p>
+                <div class="icon">
+                    <div class="circle"><span class="glyph glyph-clock"></span></div>
+                    <p>마감 관리</p>
                 </div>
             </div>
         </div>
         """
-    )
+        )
 
-    _, button_col, _ = st.columns([1, 1, 1])
-    with button_col, st.container(key="start"):
-        st.button("시작하기", use_container_width=True, on_click=go, args=("home",))
+        with st.container(key="start"):
+            st.button("시작하기", use_container_width=True, on_click=go, args=("home",))
 
 
 def ask_chatbot(api_key, messages):
