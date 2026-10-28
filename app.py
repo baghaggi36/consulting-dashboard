@@ -28,6 +28,8 @@ LANDING_PANEL_OPACITY = 0.25
 FEATURE_BG_OVERLAY_OPACITY = 0.55
 # 화면 1 「마감일이 가까운 업무」에서 마감 지난 업무와 아직 남은 업무를 묶음마다 몇 개까지 보여 줄지
 DUE_GROUP_LIMIT = 3
+# 화면 2 ① 최근 작업과 ② 다음 할 일에 Supabase 기록을 몇 줄까지 보여 줄지
+DETAIL_LIST_LIMIT = 4
 # 오른쪽 아래 대화창에서 물은 말과 받은 답을 한 줄씩 남기는 표
 CHAT_LOG_TABLE = "chat_logs"
 CHAT_LOG_LIMIT = 20
@@ -229,15 +231,16 @@ def latest_work(client, csv_latest):
     return latest
 
 
-def saved_next_and_due(client):
-    """화면 3에서 Supabase에 저장한 이 고객사의 기록에서 화면 2의 다음 할 일과 마감일을 고른다.
-    다음 할 일은 다음 할 일이 적힌 기록 중 가장 최근 것, 마감일은 마감일이 적힌 기록 중 가장 최근 것을 쓴다.
-    해당 기록이 없으면 그 칸은 None이다. 저장한 기록이 하나도 없거나 불러오지 못하면 None을 돌려주어 CSV를 쓰게 한다."""
+def saved_detail(client):
+    """화면 3에서 Supabase에 저장한 이 고객사의 기록에서 화면 2의 최근 작업·다음 할 일 목록과 마감일을 고른다.
+    최근 작업은 기록을 최근 순으로, 다음 할 일은 다음 할 일이 적힌 기록을 최근 순으로 DETAIL_LIST_LIMIT개까지 담는다.
+    마감일은 마감일이 적힌 기록 중 가장 최근 것이고, 없으면 None이다.
+    저장한 기록이 하나도 없거나 불러오지 못하면 None을 돌려주어 CSV를 쓰게 한다."""
     try:
         rows = (
             get_supabase()
             .table(WORK_TABLE)
-            .select("next_step, due_date")
+            .select("work_date, task, status, next_step, due_date")
             .eq("client_name", client)
             .order("work_date", desc=True)
             # 같은 날 두 번 저장했으면 나중에 넣은 것을 더 최근으로 본다
@@ -251,16 +254,11 @@ def saved_next_and_due(client):
 
     if not rows:
         return None
-    next_row = next((r for r in rows if (r["next_step"] or "").strip()), None)
+    next_rows = [r for r in rows if (r["next_step"] or "").strip()]
     due_row = next((r for r in rows if r["due_date"]), None)
     return {
-        "next_step": next_row["next_step"] if next_row else None,
-        # 다음 할 일 옆 괄호에는 그 할 일이 적힌 기록의 마감일을 쓴다
-        "next_due": (
-            date.fromisoformat(next_row["due_date"])
-            if next_row and next_row["due_date"]
-            else None
-        ),
+        "recent": rows[:DETAIL_LIST_LIMIT],
+        "next": next_rows[:DETAIL_LIST_LIMIT],
         "due_date": date.fromisoformat(due_row["due_date"]) if due_row else None,
     }
 
@@ -272,7 +270,7 @@ def show_detail(df):
     records = df[df["client_name"] == client].sort_values("work_date", ascending=False)
     latest = latest_work(client, records.iloc[0])
     # Supabase 기록이 하나라도 있으면 다음 할 일·마감일은 거기서만 고르고, 하나도 없으면 None이라 CSV를 쓴다
-    saved = saved_next_and_due(client)
+    saved = saved_detail(client)
     open_tasks = records[records["status"] != "완료"].sort_values("due_date")
 
     # 맨 위 한 줄: 요약과 화면 이동 버튼.
@@ -319,19 +317,24 @@ def show_detail(df):
 
             with recent_col, st.container(border=True, key="card_recent"):
                 st.subheader("① 최근 작업")
-                st.write(latest["task"])
-                st.caption(f"작성일 {latest['work_date']}")
+                if saved is not None:
+                    # Supabase 기록을 최근 순으로 몇 개까지, 한 줄에 "날짜 · 작업내용 · 진행상태"
+                    for r in saved["recent"]:
+                        st.write(f"{r['work_date']} · {r['task']} · {r['status'] or '-'}")
+                else:
+                    # Supabase 기록이 하나도 없는 고객사만 지금처럼 CSV의 가장 최근 작업을 보여 준다
+                    st.write(latest["task"])
+                    st.caption(f"작성일 {latest['work_date']}")
 
             with next_col, st.container(border=True, key="card_next"):
                 st.subheader("② 다음 할 일")
                 if saved is not None:
-                    # 다음 할 일이 적힌 Supabase 기록 중 가장 최근 것, 없으면 "없음"
-                    if saved["next_step"]:
-                        line = f"☐ {saved['next_step']}"
-                        if saved["next_due"]:
-                            line += f" (마감 {saved['next_due']})"
-                        st.write(line)
-                    else:
+                    # 다음 할 일이 적힌 Supabase 기록을 최근 순으로 몇 개까지, 없으면 "없음"
+                    for r in saved["next"]:
+                        # 그 기록에 마감일이 없으면 괄호는 뺀다
+                        due = f" (마감 {r['due_date']})" if r["due_date"] else ""
+                        st.write(f"☐ {r['next_step']}{due}")
+                    if not saved["next"]:
                         st.write("없음")
                 else:
                     # Supabase 기록이 하나도 없는 고객사만 지금처럼 CSV의 남은 할 일을 모두 보여 준다
