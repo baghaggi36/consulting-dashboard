@@ -192,17 +192,21 @@ def show_memos(client):
 
 
 def latest_work(client, csv_latest):
-    """CSV 기록과 화면 3에서 Supabase에 저장한 기록 중 더 최근 것 하나의 작업일·작업내용·진행상태를 돌려준다."""
+    """CSV 기록과 화면 3에서 Supabase에 저장한 기록 중 더 최근 것 하나의 작업일·작업내용·진행상태를 돌려준다.
+    화면 3에서 저장한 기록이 더 최근이면 그 기록의 다음 할 일·마감일도 돌려준다.
+    CSV가 더 최근이거나 그 칸이 비어 있으면 None을 돌려주어, 화면 2가 지금처럼 CSV 내용을 보여 주게 한다."""
     latest = {
         "work_date": csv_latest.work_date,
         "task": csv_latest.task,
         "status": csv_latest.status,
+        "next_step": None,
+        "due_date": None,
     }
     try:
         rows = (
             get_supabase()
             .table(WORK_TABLE)
-            .select("work_date, task, status")
+            .select("work_date, task, status, next_step, due_date")
             .eq("client_name", client)
             .order("work_date", desc=True)
             # 같은 날 두 번 저장했으면 나중에 넣은 것을 고른다
@@ -225,6 +229,10 @@ def latest_work(client, csv_latest):
                 "task": saved["task"],
                 # 진행상태를 비우고 저장했으면 "-"로 보여 준다
                 "status": saved["status"] or "-",
+                "next_step": saved["next_step"] or None,
+                "due_date": (
+                    date.fromisoformat(saved["due_date"]) if saved["due_date"] else None
+                ),
             }
     return latest
 
@@ -243,8 +251,11 @@ def show_detail(df):
 
     with summary_col, st.container(border=True, key="card_summary"):
         summary = f"**고객사명** {client} · **진행상태** `{latest['status']}`"
-        if not open_tasks.empty:
+        # 최신 기록의 마감일을 쓰고, 비어 있으면 지금처럼 CSV에서 가장 가까운 마감일을 쓴다
+        due = latest["due_date"]
+        if due is None and not open_tasks.empty:
             due = open_tasks.iloc[0]["due_date"]
+        if due is not None:
             summary += f" · **마감일** {due} ({d_day(due)})"
         st.markdown(summary)
 
@@ -281,8 +292,15 @@ def show_detail(df):
 
             with next_col, st.container(border=True, key="card_next"):
                 st.subheader("② 다음 할 일")
-                for row in open_tasks.itertuples():
-                    st.write(f"☐ {row.next_step} (마감 {row.due_date})")
+                # 최신 기록의 다음 할 일을 쓰고, 비어 있으면 지금처럼 CSV의 남은 할 일을 모두 보여 준다
+                if latest["next_step"]:
+                    line = f"☐ {latest['next_step']}"
+                    if latest["due_date"]:
+                        line += f" (마감 {latest['due_date']})"
+                    st.write(line)
+                else:
+                    for row in open_tasks.itertuples():
+                        st.write(f"☐ {row.next_step} (마감 {row.due_date})")
 
         with history_tab:
             file_col, revision_col = st.columns(2)
