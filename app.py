@@ -2,6 +2,7 @@ import base64
 import os
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote
 
 import pandas as pd
@@ -99,8 +100,50 @@ def task_row(row, label, key, badge=""):
     # 표시(badge)가 있으면 맨 앞에 두고, 날짜 글(label)이 비었으면 굵은 글씨를 빼고 쓴다
     head = " ".join(part for part in (badge, f"**{label}**" if label else "") if part)
     left.markdown(f"{head} {row.client_name} · {row.next_step}")
-    left.caption(f"마감 {row.due_date} · {row.status}")
+    # 마감일이 없는 줄(None)은 「마감일 없음」으로 보여 준다
+    due = "마감일 없음" if row.due_date is None else f"마감 {row.due_date}"
+    left.caption(f"{due} · {row.status}")
     right.button(">", key=key, on_click=go, args=("detail", row.client_name))
+
+
+def important_rows(df):
+    """화면 1 「중요 표시한 업무」에 보일 업무와 버튼 이름표를 마감일 순으로 돌려준다.
+    화면 2와 같은 규칙: Supabase 기록이 있는 고객사는 Supabase에서 중요 표시한 기록만,
+    Supabase 기록이 없는 고객사만 CSV 중요 업무를 쓴다."""
+    try:
+        saved = (
+            get_supabase()
+            .table(WORK_TABLE)
+            .select("id, client_name, next_step, due_date, status, important")
+            .execute()
+            .data
+        )
+    except Exception as e:
+        st.error(f"화면 3에서 저장한 기록을 불러오지 못했습니다: {e}")
+        saved = []
+
+    saved_clients = {r["client_name"] for r in saved}
+    # (정렬에 쓸 마감일, 줄, 버튼 이름표). 마감일이 없는 업무는 맨 아래로 보낸다
+    items = []
+    for r in saved:
+        if not r["important"]:
+            continue
+        due = date.fromisoformat(r["due_date"]) if r["due_date"] else None
+        # task_row가 CSV 줄과 같은 이름으로 읽을 수 있게 맞추고, 비어 있는 칸은 "-"로 보여 준다.
+        # 마감일만은 None으로 두어 task_row가 「마감일 없음」으로 보여 주게 한다
+        row = SimpleNamespace(
+            client_name=r["client_name"],
+            next_step=r["next_step"] or "-",
+            due_date=due,
+            status=r["status"] or "-",
+        )
+        items.append((due or date.max, row, f"star_saved_{r['id']}"))
+    csv_important = df[df["important"] & ~df["client_name"].isin(saved_clients)]
+    for row in csv_important.itertuples():
+        items.append((row.due_date, row, f"star_{row.record_id}"))
+
+    items.sort(key=lambda item: item[0])
+    return [(row, key) for _, row, key in items]
 
 
 def show_home(df):
@@ -138,8 +181,8 @@ def show_home(df):
 
     with star_col, st.container(border=True, key="card_star"):
         st.subheader("중요 표시한 업무")
-        for row in df[df["important"]].sort_values("due_date").itertuples():
-            task_row(row, "★", f"star_{row.record_id}")
+        for row, key in important_rows(df):
+            task_row(row, "★", key)
 
     with select_col, st.container(border=True, key="card_select"):
         st.subheader("확인할 고객사 선택")
@@ -443,7 +486,7 @@ def show_detail(df):
 
 
 def pick_record(client, record):
-    """기존 기록 목록에서 고른 기록을 어느 고객사 것인지와 함께 기억해 두고, 입력 칸 6개에 그 값을 채운다."""
+    """기존 기록 목록에서 고른 기록을 어느 고객사 것인지와 함께 기억해 두고, 입력 칸 6개와 중요 표시에 그 값을 채운다."""
     st.session_state.picked_record = {"client": client, **record}
     for field in RECORD_FIELDS:
         value = record[field]
@@ -453,13 +496,15 @@ def pick_record(client, record):
             # 비어 있는 칸은 빈 글자로 채운다
             value = value or ""
         st.session_state[f"rec_{field}"] = value
+    st.session_state.rec_important = bool(record.get("important"))
 
 
 def clear_record_form():
-    """고른 기록을 잊고 입력 칸 6개를 비운다."""
+    """고른 기록을 잊고 입력 칸 6개를 비우고 중요 표시를 끈다."""
     st.session_state.pop("picked_record", None)
     for field in RECORD_FIELDS:
         st.session_state[f"rec_{field}"] = None if field == "due_date" else ""
+    st.session_state.rec_important = False
 
 
 def ask_delete_record(record_id):
@@ -509,7 +554,7 @@ def show_work_records(client):
                 .table(WORK_TABLE)
                 .select(
                     "id, work_date, task, status, next_step, due_date,"
-                    " file_location, revision_note"
+                    " file_location, revision_note, important"
                 )
                 .eq("client_name", client)
                 .order("work_date", desc=True)
@@ -539,7 +584,9 @@ def show_work_records(client):
                 r = {k: "-" if v is None else v for k, v in raw.items()}
                 with st.container(border=True):
                     left, right = st.columns([6, 1])
-                    left.markdown(f"**{r['work_date']}** · {r['task']} `{r['status']}`")
+                    # 중요 표시한 기록은 앞에 ★을 붙인다
+                    star = "★ " if raw.get("important") else ""
+                    left.markdown(f"{star}**{r['work_date']}** · {r['task']} `{r['status']}`")
                     left.caption(f"다음 할 일 {r['next_step']} · 마감 {r['due_date']}")
                     left.caption(f"파일 위치 {r['file_location']}")
                     left.caption(f"수정내용 {r['revision_note']}")
@@ -589,7 +636,10 @@ def show_record_form(client):
         if picked and picked["client"] == client:
             # 다른 화면에 다녀오면 입력 칸 값은 지워지고 고른 기록만 남는다.
             # 그때는 입력 칸을 고른 기록으로 다시 채워, 안내와 입력 칸이 어긋나지 않게 한다
-            if any(f"rec_{field}" not in st.session_state for field in RECORD_FIELDS):
+            if any(
+                f"rec_{field}" not in st.session_state
+                for field in (*RECORD_FIELDS, "important")
+            ):
                 pick_record(client, picked)
             st.info(f"고른 기록: {picked['work_date']} · {picked['task']}")
 
@@ -597,6 +647,8 @@ def show_record_form(client):
 
         # 마감일 칸은 처음에 비워 둔다
         st.session_state.setdefault("rec_due_date", None)
+        # 중요 표시는 처음에 꺼 둔다
+        st.session_state.setdefault("rec_important", False)
 
         with st.form("record_form"):
             task = st.text_area(
@@ -613,6 +665,7 @@ def show_record_form(client):
                 key="rec_file_location",
             )
             revision_note = st.text_area("수정내용", key="rec_revision_note")
+            important = st.checkbox("⭐ 중요 표시", key="rec_important")
             submitted = st.form_submit_button("저장", type="primary", use_container_width=True)
 
         if not submitted:
@@ -629,6 +682,7 @@ def show_record_form(client):
             "due_date": due_date.isoformat() if due_date else None,
             "file_location": file_location.strip() or None,
             "revision_note": revision_note.strip() or None,
+            "important": important,
         }
 
         # 이 고객사의 기록을 골라 두었으면 그 기록을 바꾸고, 아니면 새로 넣는다
