@@ -8,6 +8,7 @@
     줄을 더하고 고치고 지우려면 표의 RLS(행 단위 접근 규칙)에서 insert·update·delete가 허용되어야 한다.
 """
 
+import os
 from datetime import date
 from pathlib import Path
 
@@ -68,7 +69,9 @@ st.set_page_config(page_title="구독 정리함", page_icon="📦", layout="wide
 st.title("📦 구독 정리함")
 
 env = load_env(ENV_PATH)
-url, key = env.get("SUPABASE_URL"), env.get("SUPABASE_KEY")
+# .env가 없는 올린 곳에서는, Streamlit이 Secrets 값을 같은 이름의 환경 변수로 넣어 둔 것을 읽는다
+url = env.get("SUPABASE_URL") or os.environ.get("SUPABASE_URL")
+key = env.get("SUPABASE_KEY") or os.environ.get("SUPABASE_KEY")
 if not url or not key:
     st.error(".env에 SUPABASE_URL과 SUPABASE_KEY 값을 넣어 주세요.")
     st.stop()

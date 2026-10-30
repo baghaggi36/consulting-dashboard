@@ -7,6 +7,7 @@
     streamlit run helper.py
 """
 
+import os
 from pathlib import Path
 
 import streamlit as st
@@ -44,7 +45,8 @@ def ask_gemini(api_key, text):
 st.set_page_config(page_title="챗봇", page_icon="💬")
 st.title("챗봇")
 
-api_key = load_env(ENV_PATH).get("GEMINI_API_KEY")
+# .env가 없는 올린 곳에서는, Streamlit이 Secrets 값을 같은 이름의 환경 변수로 넣어 둔 것을 읽는다
+api_key = load_env(ENV_PATH).get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
 
 # 키 값은 화면에 보이지 않고, 채워져 있는지만 알려 준다.
 if api_key:
