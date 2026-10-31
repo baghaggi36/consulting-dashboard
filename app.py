@@ -1,6 +1,9 @@
 import base64
+import html
 import os
-from datetime import date
+import re
+import zlib
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote
@@ -33,6 +36,24 @@ LANDING_PANEL_OPACITY = 0.25
 FEATURE_BG_OVERLAY_OPACITY = 0.55
 # 화면 1 「마감일이 가까운 업무」에서 마감 지난 업무와 아직 남은 업무를 묶음마다 몇 개까지 보여 줄지
 DUE_GROUP_LIMIT = 3
+# 고객사 표시(색 동그라미 안 첫 글자)에 돌려 쓰는 색. 흰 굵은 글씨가 잘 읽히는 진하기로 고르고,
+# 「마감 지남」 표시와 헷갈리지 않도록 빨간 계열은 넣지 않는다
+CLIENT_MARK_COLORS = (
+    "#0284C7",  # 하늘색
+    "#2563EB",  # 파랑
+    "#4F46E5",  # 남보라
+    "#7C3AED",  # 보라
+    "#0891B2",  # 청록
+    "#0D9488",  # 틸
+    "#059669",  # 초록
+    "#65A30D",  # 연두
+    "#CA8A04",  # 노랑
+    "#EA580C",  # 주황
+)
+# 고객사 이름 앞에 붙어 있으면 첫 글자를 고를 때 건너뛰는 말
+CLIENT_NAME_PREFIX = re.compile(
+    r"^\s*(\(주\)|㈜|주식회사|\(유\)|유한회사|농업회사법인|영농조합법인|\(사\)|사단법인|재단법인)\s*"
+)
 # 화면 2 ① 최근 작업과 ② 다음 할 일에 Supabase 기록을 몇 줄까지 보여 줄지
 DETAIL_LIST_LIMIT = 4
 # 오른쪽 아래 대화창에서 물은 말과 받은 답을 한 줄씩 남기는 표
@@ -71,8 +92,14 @@ def load_records():
     return df
 
 
+def seoul_today():
+    """한국 시간(Asia/Seoul) 기준 오늘 날짜. 인터넷 서버의 시간대와 상관없이 한국 날짜를 돌려준다.
+    아침 브리핑과 화면 1·2의 마감 계산이 모두 이 '오늘'을 함께 쓴다."""
+    return pd.Timestamp.now(tz="Asia/Seoul").date()
+
+
 def d_day(due):
-    days = (due - date.today()).days
+    days = (due - seoul_today()).days
     if days == 0:
         return "D-day"
     return f"D-{days}" if days > 0 else f"D+{-days}"
@@ -81,12 +108,31 @@ def d_day(due):
 def due_mark(due):
     """화면 1 「마감일이 가까운 업무」에 붙일 표시와 날짜 글을 돌려준다.
     마감이 지났으면 빨간 「마감 지남」과 "19일 지남", 오늘이면 주황 「오늘 마감」, 아직 남았으면 "D-3"."""
-    days = (due - date.today()).days
+    days = (due - seoul_today()).days
     if days < 0:
         return ":red-badge[마감 지남]", f"{-days}일 지남"
     if days == 0:
         return ":orange-badge[오늘 마감]", ""
     return "", f"D-{days}"
+
+
+def morning_briefing(df):
+    """첫 화면 「아침 브리핑」 한 줄을 HTML로 돌려준다. 예: 10월 31일 토요일 · 마감 지난 일 3건 · 이번 주 마감 2건.
+    날짜는 화면 1과 같은 seoul_today()로 정한다.
+    화면 1 「마감 챙길 업무」와 같은 자료(df)에서 '완료'가 아닌 업무만 센다.
+    이번 주 마감은 오늘부터 6일 뒤까지(오늘 포함 7일) 마감인 업무다. 마감 지난 일 숫자만 둥근 빨간 뱃지로 보여 준다."""
+    today = seoul_today()
+    dues = df.loc[df["status"] != "완료", "due_date"].dropna()
+    overdue = int((dues < today).sum())
+    this_week = int(((dues >= today) & (dues <= today + timedelta(days=6))).sum())
+
+    weekday = "월화수목금토일"[today.weekday()]
+    day_text = f"{today.month}월 {today.day}일 {weekday}요일"
+    overdue_text = (
+        f'마감 지난 일 <span class="overdue">{overdue}</span>건' if overdue else "마감 지난 일 없음"
+    )
+    week_text = f"이번 주 마감 {this_week}건" if this_week else "이번 주 마감 없음"
+    return f'<p class="briefing">{day_text} · {overdue_text} · {week_text}</p>'
 
 
 def go(screen, client=None):
@@ -95,11 +141,40 @@ def go(screen, client=None):
         st.session_state.client = client
 
 
+def client_mark(name):
+    """고객사 표시의 (색, 첫 글자)를 정한다. 색과 첫 글자 규칙은 모두 여기에만 둔다.
+    색과 첫 글자 모두 '(주)'·'주식회사'·'농업회사법인' 같은 앞말과 띄어쓰기를 뺀 남은 이름으로 정한다.
+    그래서 "(주)그린팜푸드"·"주식회사 그린팜푸드"·"그린팜푸드"는 같은 색, 같은 글자다.
+    남은 이름 글자로만 정하므로 고객사를 새로 추가해도 다른 회사 색은 그대로다."""
+    rest = name
+    while (m := CLIENT_NAME_PREFIX.match(rest)) and m.end() < len(rest):
+        rest = rest[m.end():]
+    core = re.sub(r"\s+", "", rest)
+    color = CLIENT_MARK_COLORS[zlib.crc32(core.encode("utf-8")) % len(CLIENT_MARK_COLORS)]
+    return color, (core[:1].upper() if core else "?")
+
+
+def client_badge(name):
+    """고객사 이름 앞에 붙일 색 동그라미(흰 굵은 첫 글자)를 HTML로 돌려준다. st.markdown(..., unsafe_allow_html=True)로 그린다."""
+    color, letter = client_mark(name)
+    return (
+        f'<span style="display:inline-flex;align-items:center;justify-content:center;'
+        f"width:1.6em;height:1.6em;border-radius:50%;background:{color};"
+        f"color:#FFFFFF;font-weight:800;font-size:0.8em;line-height:1;"
+        f'vertical-align:middle;margin-right:0.3em;">{html.escape(letter)}</span>'
+    )
+
+
 def task_row(row, label, key, badge=""):
     left, right = st.columns([6, 1])
     # 표시(badge)가 있으면 맨 앞에 두고, 날짜 글(label)이 비었으면 굵은 글씨를 빼고 쓴다
     head = " ".join(part for part in (badge, f"**{label}**" if label else "") if part)
-    left.markdown(f"{head} {row.client_name} · {row.next_step}")
+    # 고객사 표시를 그리려고 HTML을 허용하므로, 입력받은 글은 그대로 글자로 보이게 바꿔 넣는다
+    name = html.escape(row.client_name)
+    left.markdown(
+        f"{head} {client_badge(row.client_name)}{name} · {html.escape(str(row.next_step))}",
+        unsafe_allow_html=True,
+    )
     # 마감일이 없는 줄(None)은 「마감일 없음」으로 보여 준다
     due = "마감일 없음" if row.due_date is None else f"마감 {row.due_date}"
     left.caption(f"{due} · {row.status}")
@@ -158,7 +233,7 @@ def show_home(df):
         st.subheader("마감 챙길 업무")
         # 마감 지난 업무(오래된 순)를 위에, 아직 남은 업무(오늘 마감 포함, 가까운 순)를 아래에 묶음마다 몇 개씩 보여 준다.
         # open_tasks가 마감일 순이라 두 묶음 모두 이미 원하는 순서다. 빈 묶음은 소제목째 그리지 않는다
-        is_overdue = open_tasks["due_date"] < date.today()
+        is_overdue = open_tasks["due_date"] < seoul_today()
         groups = [
             (title, g)
             for title, g in (
@@ -394,7 +469,7 @@ def show_detail(df):
 
     with summary_col, st.container(border=True, key="card_summary"):
         status = f"`{latest['status']}`" if latest else NO_RECORD_TEXT
-        summary = f"**고객사명** {client} · **진행상태** {status}"
+        summary = f"**고객사명** {client_badge(client)}{html.escape(client)} · **진행상태** {status}"
         if saved is not None:
             # 마감일이 적힌 Supabase 기록 중 가장 최근 것, 없으면 "없음"
             due = saved["due_date"]
@@ -405,7 +480,7 @@ def show_detail(df):
             summary += f" · **마감일** {due} ({d_day(due)})"
         elif records.empty:
             summary += f" · **마감일** {NO_RECORD_TEXT}"
-        st.markdown(summary)
+        st.markdown(summary, unsafe_allow_html=True)
 
     with nav_col:
         record_btn_col, home_btn_col = st.columns(2)
@@ -547,6 +622,8 @@ def show_work_records(client):
     """화면 3에 이 고객사의 기존 업무 기록을 최근 것부터 보여 준다."""
     with st.container(border=True, key="card_records"):
         st.subheader("기존 기록 목록")
+        # 어느 고객사의 기록인지 고객사 표시와 이름으로 알려 준다
+        st.markdown(f"{client_badge(client)}{html.escape(client)}의 기록", unsafe_allow_html=True)
 
         try:
             rows = (
@@ -715,7 +792,7 @@ def show_record_form(client):
             get_supabase().table(WORK_TABLE).insert(
                 {
                     "client_name": client,
-                    "work_date": date.today().isoformat(),
+                    "work_date": seoul_today().isoformat(),
                     **values,
                 }
             ).execute()
@@ -774,12 +851,17 @@ LANDING_ICONS = {
 
 # 첫 화면 배경 사진. 원본(autumn_sky.jpg.jpg)을 가로 1920픽셀로 줄인 복사본을 쓴다
 LANDING_BG_FILE = Path(__file__).parent / "assets" / "autumn_sky.jpg"
+# 첫 화면 카드 맨 아래 「시작하기」 밑에 두는 로고와 서명 한 줄
+LANDING_LOGO_FILE = Path(__file__).parent / "assets" / "logo_gonggam_mark_only.png"
+LANDING_SIGNATURE = "(주)공감경영컨설팅 박학기 본부장"
 
 
 @st.cache_data
 def image_data_url(path):
-    """사진 파일을 꾸밈 설정에 바로 넣을 수 있는 data URL로 만든다. 한 번 만든 것은 다시 쓴다."""
-    return "data:image/jpeg;base64," + base64.b64encode(Path(path).read_bytes()).decode()
+    """사진 파일을 꾸밈 설정이나 <img>에 바로 넣을 수 있는 data URL로 만든다. 한 번 만든 것은 다시 쓴다.
+    .png는 PNG로, 나머지는 JPEG로 알린다."""
+    kind = "png" if Path(path).suffix.lower() == ".png" else "jpeg"
+    return f"data:image/{kind};base64," + base64.b64encode(Path(path).read_bytes()).decode()
 
 
 def line_icon_url(shapes):
@@ -794,8 +876,9 @@ def line_icon_url(shapes):
     return "data:image/svg+xml," + quote(svg)
 
 
-def show_landing():
+def show_landing(df):
     """서비스를 소개하는 첫 화면. 「시작하기」를 누르면 화면 1로 간다.
+    한 줄 소개 아래에 화면 1과 같은 자료(df)로 센 「아침 브리핑」을 보여 준다.
     색은 이 화면을 그릴 때만 넣으므로 기능 화면에는 퍼지지 않는다."""
     st.html(
         """
@@ -838,8 +921,26 @@ def show_landing():
         .landing .intro {
             font-size: 20px;
             line-height: 1.6;
-            margin: 0 auto 40px;
+            margin: 0 auto 12px;
             max-width: 720px;
+        }
+        /* 아침 브리핑 한 줄. 마감 지난 일 숫자만 연한 빨간 바탕의 작은 둥근 뱃지로 보인다 */
+        .landing .briefing {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1E293B;
+            margin: 0 auto 32px;
+        }
+        .landing .briefing .overdue {
+            display: inline-block;
+            min-width: 1.6em;
+            padding: 1px 8px;
+            margin: 0 2px;
+            border-radius: 999px;
+            background: #FDE2E2;
+            color: #DC2626;
+            font-weight: 800;
+            line-height: 1.4;
         }
         /* 하는 일 세 가지: 선 모양 아이콘을 가로로 나란히 두고 아래에 이름만 쓴다 */
         .landing .icons {
@@ -898,6 +999,24 @@ def show_landing():
             border-color: #0369A1;
             color: #FFFFFF;
         }
+        /* 「시작하기」 밑 로고와 서명 한 줄: 가운데에 나란히 두고, 문구는 작은 회색 글씨 */
+        .landing-sign {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px auto 0;
+            text-align: center;
+        }
+        .landing-sign img {
+            height: 36px;
+            width: auto;
+        }
+        .landing-sign p {
+            margin: 0;
+            font-size: 17px;
+            color: #475569;
+        }
         /* 첫 화면에서는 사이드바와 그 여닫는 단추를 감춘다 */
         [data-testid="stSidebar"],
         [data-testid="stSidebarCollapsedControl"] {
@@ -906,9 +1025,14 @@ def show_landing():
         @media (max-width: 640px) {
             .landing h1 { font-size: 34px; }
             .landing .intro { font-size: 17px; }
+            .landing .briefing { font-size: 17px; }
             .landing .icons { gap: 24px; }
             .landing .icon { width: 90px; }
             .st-key-start { width: 318px; }
+            /* 좁은 화면에서는 로고를 위, 문구를 아래 두 줄로 둔다 */
+            .landing-sign { flex-direction: column; gap: 6px; }
+            .landing-sign img { height: 32px; }
+            .landing-sign p { font-size: 16px; }
             .st-key-landing_panel { margin: 16px auto; padding: 24px 16px; }
         }
         </style>
@@ -947,10 +1071,11 @@ def show_landing():
 
     with st.container(key="landing_panel"):
         st.html(
-            """
+            f"""
         <div class="landing">
             <h1>📋 <span>개인용</span> 관리판</h1>
             <p class="intro">여러 고객사 업무를 한 화면에</p>
+            {morning_briefing(df)}
             <div class="icons">
                 <div class="icon">
                     <div class="circle"><span class="glyph glyph-building"></span></div>
@@ -971,6 +1096,15 @@ def show_landing():
 
         with st.container(key="start"):
             st.button("시작하기", use_container_width=True, on_click=go, args=("home",))
+
+        st.html(
+            f"""
+        <div class="landing-sign">
+            <img src="{image_data_url(str(LANDING_LOGO_FILE))}" alt="공감 로고">
+            <p>{html.escape(LANDING_SIGNATURE)}</p>
+        </div>
+        """
+        )
 
 
 def ask_chatbot(api_key, messages):
@@ -1157,7 +1291,7 @@ records = load_records()
 st.session_state.setdefault("screen", "landing")
 
 if st.session_state.screen == "landing":
-    show_landing()
+    show_landing(records)
 else:
     # 화면 1·2·3 배경에도 첫 화면과 같은 사진을 깔고, 연한 하늘색을 FEATURE_BG_OVERLAY_OPACITY만큼 덮어 은은하게 보이게 한다.
     # 카드(이름표가 card_로 시작하는 칸)는 흰 바탕으로 두어 업무 글씨가 잘 읽히게 한다
