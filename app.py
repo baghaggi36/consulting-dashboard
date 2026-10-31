@@ -1181,6 +1181,27 @@ else:
         [data-testid="stMain"] [class*="st-key-card_"] {{
             background: #FFFFFF;
         }}
+        /* 휴대폰이 다크 모드여도 흰 카드 위 글자가 보이도록, 카드 안 글자는 진한 색으로 정한다 */
+        [data-testid="stMain"] [class*="st-key-card_"] :is(p, li, span, label, h1, h2, h3, h4, h5, h6, div[data-testid="stMarkdownContainer"]) {{
+            color: #1E293B;
+        }}
+        /* 입력칸(글 칸·날짜 칸·고르기 칸)은 흰 바탕에 진한 글자로 정한다. 챗봇 대화창 안도 같다 */
+        :is([data-testid="stMain"], [data-testid="stSidebar"], [data-testid="stPopoverBody"])
+            :is(input, textarea, [data-baseweb="select"] > div) {{
+            background: #FFFFFF;
+            color: #1E293B;
+            -webkit-text-fill-color: #1E293B;
+        }}
+        :is([data-testid="stMain"], [data-testid="stSidebar"], [data-testid="stPopoverBody"])
+            :is(input, textarea)::placeholder {{
+            color: #64748B;
+            -webkit-text-fill-color: #64748B;
+        }}
+        /* 챗봇 대화창 안 버튼 글자도 진한 색으로 정한다 */
+        [data-testid="stPopoverBody"] button {{
+            background: #FFFFFF;
+            color: #1E293B;
+        }}
         </style>
         """
     )
