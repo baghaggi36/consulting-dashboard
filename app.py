@@ -1,5 +1,6 @@
 import base64
 import html
+import io
 import os
 import re
 import zlib
@@ -13,6 +14,7 @@ import streamlit as st
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from PIL import Image
 from supabase import create_client
 
 DATA_FILE = Path(__file__).parent / "data" / "records.csv"
@@ -22,6 +24,21 @@ MEMO_TABLE = "client_memos"
 WORK_TABLE = "work_records"
 # 화면 1에서 추가한 고객사를 담는 표
 CLIENT_TABLE = "clients"
+# 화면 2 「인증 만료」 탭에서 쓰고 읽는 고객사별 인증 표
+CERT_TABLE = "client_certifications"
+# 인증 이름 고르는 칸의 목록. 맨 끝 「직접 입력」을 고르면 글 칸이 열린다
+CERT_TYPES = ("벤처기업", "이노비즈", "메인비즈", "ISO 9001", "ISO 14001", "기업부설연구소")
+CERT_CUSTOM = "직접 입력"
+# 인증 D-day 색 기준(남은 날). 이 날수 이내면 노랑, CERT_ALERT_DAYS 이내면 주황, 지났으면 빨강
+CERT_WARN_DAYS = 90
+CERT_ALERT_DAYS = 30
+# 인증 D-day 뱃지의 (바탕색, 글자색). 색이 없는 단계(91일 이상)는 회색 글자만 쓴다
+CERT_DDAY_COLORS = {
+    "yellow": ("#FEF9C3", "#854D0E"),
+    "orange": ("#FFEDD5", "#C2410C"),
+    "red": ("#FDE2E2", "#DC2626"),
+    None: ("transparent", "#64748B"),
+}
 # 기록이 하나도 없는 고객사(새로 추가한 고객사 등)의 화면 2 칸에 보여 줄 글
 NO_RECORD_TEXT = "아직 기록이 없습니다"
 # 화면 3 입력 칸 6개에 대응하는 업무 기록 표의 열
@@ -30,7 +47,7 @@ RECORD_FIELDS = ("task", "status", "next_step", "due_date", "file_location", "re
 RECORD_LIST_HEIGHT = 680
 # 첫 화면 배경 사진 위에 덮는 연한 하늘색(#F0F9FF)의 진하기. 0이면 사진 그대로, 1이면 사진이 안 보인다
 LANDING_BG_OVERLAY_OPACITY = 0.45
-# 첫 화면 유리 판의 흰색 진하기. 0이면 투명, 1이면 꽉 찬 흰색
+# 첫 화면 유리 판의 흰색 진하기. 0이면 투명, 1이면 꽉 찬 흰색. 화면 1·2·3 카드와 제목 띠도 이 값을 같이 쓴다
 LANDING_PANEL_OPACITY = 0.25
 # 화면 1·2·3 배경 사진 위에 덮는 연한 하늘색(#F0F9FF)의 진하기. 첫 화면 것과 따로 둔다
 FEATURE_BG_OVERLAY_OPACITY = 0.55
@@ -103,6 +120,31 @@ def d_day(due):
     if days == 0:
         return "D-day"
     return f"D-{days}" if days > 0 else f"D+{-days}"
+
+
+def cert_d_day(expires_on):
+    """인증 만료일까지 남은 날의 (D-day 글, 색 단계)를 돌려준다. 날짜는 seoul_today() 기준이다.
+    31~90일 남았으면 "yellow", 0~30일이면 "orange", 지났으면 "red", 91일 이상이면 None(색 없음)."""
+    days = (expires_on - seoul_today()).days
+    if days < 0:
+        level = "red"
+    elif days <= CERT_ALERT_DAYS:
+        level = "orange"
+    elif days <= CERT_WARN_DAYS:
+        level = "yellow"
+    else:
+        level = None
+    return d_day(expires_on), level
+
+
+def cert_d_day_badge(expires_on):
+    """인증 목록에 붙일 D-day 뱃지를 HTML로 돌려준다. st.markdown(..., unsafe_allow_html=True)로 그린다."""
+    label, level = cert_d_day(expires_on)
+    background, color = CERT_DDAY_COLORS[level]
+    return (
+        f'<span style="display:inline-block;padding:1px 8px;border-radius:999px;'
+        f'background:{background};color:{color};font-weight:700;">{label}</span>'
+    )
 
 
 def due_mark(due):
@@ -503,7 +545,7 @@ def show_detail(df):
     main_col, memo_col = st.columns([3, 1])
 
     with main_col:
-        now_tab, history_tab = st.tabs(["지금 현황", "파일·수정 이력"])
+        now_tab, history_tab, cert_tab = st.tabs(["지금 현황", "파일·수정 이력", "인증 만료"])
 
         with now_tab:
             recent_col, next_col = st.columns(2)
@@ -556,8 +598,206 @@ def show_detail(df):
                 if records.empty:
                     st.write(NO_RECORD_TEXT)
 
+        with cert_tab:
+            show_certs(client)
+
     with memo_col:
         show_memos(client)
+
+
+def pick_cert(client, cert):
+    """인증 목록에서 고른 인증을 어느 고객사 것인지와 함께 기억해 두고, 입력 칸에 그 값을 채운다."""
+    st.session_state.picked_cert = {"client": client, **cert}
+    if cert["cert_name"] in CERT_TYPES:
+        st.session_state.cert_type = cert["cert_name"]
+        st.session_state.cert_custom = ""
+    else:
+        st.session_state.cert_type = CERT_CUSTOM
+        st.session_state.cert_custom = cert["cert_name"]
+    st.session_state.cert_expires = date.fromisoformat(cert["expires_on"])
+
+
+def clear_cert_form():
+    """고른 인증을 잊고 인증 입력 칸을 비운다."""
+    st.session_state.pop("picked_cert", None)
+    st.session_state.cert_type = None
+    st.session_state.cert_custom = ""
+    st.session_state.cert_expires = None
+
+
+def save_cert(client):
+    """인증 입력 칸의 값을 저장한다. 고른 인증이 있으면 그 인증을 고치고, 없으면 지금 보고 있는 고객사의 인증으로 새로 넣는다.
+    인증 이름은 앞뒤 빈칸을 지워 저장한다. 결과 안내는 다시 그린 탭에 보여 주도록 남겨 둔다."""
+    cert_type = st.session_state.get("cert_type")
+    if cert_type == CERT_CUSTOM:
+        name = st.session_state.get("cert_custom", "").strip()
+    else:
+        name = (cert_type or "").strip()
+    expires = st.session_state.get("cert_expires")
+    if not name:
+        st.session_state.cert_message = ("warning", "인증 이름을 먼저 고르거나 입력해 주세요")
+        return
+    if expires is None:
+        st.session_state.cert_message = ("warning", "만료일을 먼저 넣어 주세요")
+        return
+
+    values = {"cert_name": name, "expires_on": expires.isoformat()}
+    picked = st.session_state.get("picked_cert")
+    try:
+        if picked and picked["client"] == client:
+            changed = (
+                get_supabase().table(CERT_TABLE).update(values).eq("id", picked["id"]).execute().data
+            )
+            # 고치기 허용이 없으면 오류 없이 아무 줄도 바뀌지 않는다
+            if not changed:
+                st.session_state.cert_message = (
+                    "error",
+                    "인증을 고치지 못했습니다: 바뀐 인증이 없습니다."
+                    f" Supabase {CERT_TABLE} 표의 고치기(UPDATE) 허용을 확인해 주세요",
+                )
+                return
+            done = "인증을 고쳤습니다"
+        else:
+            get_supabase().table(CERT_TABLE).insert({"client_name": client, **values}).execute()
+            done = "인증을 저장했습니다"
+    except Exception as e:
+        # 한 고객사에 같은 이름의 인증은 하나만 두도록 만든 표가 거절한다
+        if "23505" in str(e) or "duplicate" in str(e).lower():
+            st.session_state.cert_message = (
+                "warning",
+                f"이미 있는 인증입니다: {name}. 목록에서 고르기로 고쳐 주세요",
+            )
+        else:
+            st.session_state.cert_message = ("error", f"인증을 저장하지 못했습니다: {e}")
+        return
+    clear_cert_form()
+    st.session_state.cert_message = ("success", done)
+
+
+def ask_delete_cert(cert_id):
+    """「삭제」를 누른 인증을 기억해 두어, 그 자리에서 한 번 더 묻게 한다."""
+    st.session_state.deleting_cert_id = cert_id
+    st.session_state.pop("cert_message", None)
+
+
+def cancel_delete_cert():
+    """지우기를 그만두고 묻는 글을 감춘다."""
+    st.session_state.pop("deleting_cert_id", None)
+
+
+def delete_cert(cert_id):
+    """인증 하나를 Supabase 인증 표에서 지운다. 고른 인증이었다면 입력 칸도 비운다."""
+    st.session_state.pop("deleting_cert_id", None)
+    try:
+        deleted = get_supabase().table(CERT_TABLE).delete().eq("id", cert_id).execute().data
+    except Exception as e:
+        st.session_state.cert_message = ("error", f"인증을 지우지 못했습니다: {e}")
+        return
+    # 지우기 허용이 없으면 오류 없이 아무 줄도 지워지지 않는다
+    if not deleted:
+        st.session_state.cert_message = (
+            "error",
+            "인증을 지우지 못했습니다: 지워진 인증이 없습니다."
+            f" Supabase {CERT_TABLE} 표의 지우기(DELETE) 허용을 확인해 주세요",
+        )
+        return
+    picked = st.session_state.get("picked_cert")
+    if picked and picked["id"] == cert_id:
+        clear_cert_form()
+    st.session_state.cert_message = ("success", "인증을 지웠습니다")
+
+
+def show_certs(client):
+    """화면 2 「인증 만료」 탭. 지금 보고 있는 고객사의 인증을 만료일이 가까운 순으로 D-day와 함께 보여 주고,
+    아래 입력 칸에서 넣고 고친다. 인증은 언제나 지금 보고 있는 고객사의 것으로 저장된다."""
+    picked = st.session_state.get("picked_cert")
+    # 다른 고객사에서 골라 둔 인증은 잊고 입력 칸을 비운다
+    if picked and picked["client"] != client:
+        clear_cert_form()
+        picked = None
+    # 다른 화면에 다녀오면 입력 칸 값은 지워지고 고른 인증만 남는다. 그때는 입력 칸을 고른 인증으로 다시 채운다
+    elif picked and "cert_type" not in st.session_state:
+        pick_cert(client, picked)
+    st.session_state.setdefault("cert_type", None)
+    st.session_state.setdefault("cert_custom", "")
+    st.session_state.setdefault("cert_expires", None)
+
+    with st.container(border=True, key="card_cert"):
+        st.subheader("인증 만료")
+        st.markdown(f"{client_badge(client)}{html.escape(client)}의 인증", unsafe_allow_html=True)
+
+        # 바로 앞에서 저장하거나 지운 결과를 한 번만 보여 준다
+        message = st.session_state.pop("cert_message", None)
+        if message:
+            kind, text = message
+            {"success": st.success, "warning": st.warning}.get(kind, st.error)(text)
+
+        try:
+            rows = (
+                get_supabase()
+                .table(CERT_TABLE)
+                .select("id, cert_name, expires_on")
+                .eq("client_name", client)
+                .order("expires_on")
+                .execute()
+                .data
+            )
+        except Exception as e:
+            st.error(f"인증을 불러오지 못했습니다: {e}")
+            rows = []
+
+        if not rows:
+            st.caption("아직 넣은 인증이 없습니다")
+        deleting_id = st.session_state.get("deleting_cert_id")
+        for cert in rows:
+            expires = date.fromisoformat(cert["expires_on"])
+            with st.container(border=True):
+                left, right = st.columns([6, 1])
+                left.markdown(
+                    f"**{html.escape(cert['cert_name'])}** · 만료 {expires} {cert_d_day_badge(expires)}",
+                    unsafe_allow_html=True,
+                )
+                right.button("고르기", key=f"cert_pick_{cert['id']}", on_click=pick_cert, args=(client, cert))
+                right.button("삭제", key=f"cert_delete_{cert['id']}", on_click=ask_delete_cert, args=(cert["id"],))
+                if picked and picked["id"] == cert["id"]:
+                    st.success("아래 입력 칸에 불러왔어요. 고친 뒤 저장을 누르세요")
+                # 「삭제」를 누른 인증이면 바로 지우지 않고 한 번 더 묻는다
+                if deleting_id == cert["id"]:
+                    st.warning("이 인증을 지울까요? 지우면 되돌릴 수 없어요")
+                    confirm_col, cancel_col = st.columns(2)
+                    confirm_col.button(
+                        "지우기",
+                        key=f"cert_confirm_delete_{cert['id']}",
+                        use_container_width=True,
+                        on_click=delete_cert,
+                        args=(cert["id"],),
+                    )
+                    cancel_col.button(
+                        "취소",
+                        key=f"cert_cancel_delete_{cert['id']}",
+                        use_container_width=True,
+                        on_click=cancel_delete_cert,
+                    )
+
+        st.divider()
+        if picked:
+            st.info(f"고른 인증: {picked['cert_name']} · 만료 {picked['expires_on']}")
+        type_col, custom_col, expires_col = st.columns(3)
+        type_col.selectbox(
+            "인증 이름",
+            options=(*CERT_TYPES, CERT_CUSTOM),
+            key="cert_type",
+            placeholder="인증을 고르세요",
+        )
+        # 「직접 입력」을 고른 때만 글 칸을 연다
+        if st.session_state.cert_type == CERT_CUSTOM:
+            custom_col.text_input("직접 입력", key="cert_custom", placeholder="예: 녹색인증")
+        expires_col.date_input("만료일", key="cert_expires")
+        save_col, new_col = st.columns(2)
+        save_col.button(
+            "저장", type="primary", use_container_width=True, on_click=save_cert, args=(client,)
+        )
+        new_col.button("새로 쓰기", use_container_width=True, on_click=clear_cert_form)
 
 
 def pick_record(client, record):
@@ -854,6 +1094,12 @@ LANDING_BG_FILE = Path(__file__).parent / "assets" / "autumn_sky.jpg"
 # 첫 화면 카드 맨 아래 「시작하기」 밑에 두는 로고와 서명 한 줄
 LANDING_LOGO_FILE = Path(__file__).parent / "assets" / "logo_gonggam_mark_only.png"
 LANDING_SIGNATURE = "(주)공감경영컨설팅 박학기 본부장"
+# 오른쪽 아래 챗봇 단추에 넣는 로봇 그림. 파일이 없거나 못 읽으면 원래 ✨ 마크를 보여 준다
+CHATBOT_FACE_FILE = Path(__file__).parent / "assets" / "bot_robot.png"
+# 동그란 단추 안에서 그림을 얼마나 키우고(배경 크기) 어디를 가운데에 둘지(가로 세로 위치).
+# 로봇 그림은 동그라미가 그림 폭의 약 96%이고 바깥은 투명하다. 동그라미가 단추를 꽉 채워 바깥 틈이 보이지 않도록 105%로 키운다
+CHATBOT_FACE_ZOOM = "105%"
+CHATBOT_FACE_POSITION = "center"
 
 
 @st.cache_data
@@ -862,6 +1108,25 @@ def image_data_url(path):
     .png는 PNG로, 나머지는 JPEG로 알린다."""
     kind = "png" if Path(path).suffix.lower() == ".png" else "jpeg"
     return f"data:image/{kind};base64," + base64.b64encode(Path(path).read_bytes()).decode()
+
+
+@st.cache_data
+def small_photo_url(path, size=256):
+    """그림을 가로세로 size픽셀 안으로 줄여 data URL로 만든다. 못 읽으면 None. 한 번 만든 것은 다시 쓴다.
+    투명한 부분이 있는 그림(PNG 등)은 투명함을 살려 PNG로, 나머지는 JPEG로 만든다."""
+    try:
+        with Image.open(path) as img:
+            img.thumbnail((size, size))
+            buffer = io.BytesIO()
+            if img.mode in ("RGBA", "LA") or "transparency" in img.info:
+                img.convert("RGBA").save(buffer, "PNG", optimize=True)
+                kind = "png"
+            else:
+                img.convert("RGB").save(buffer, "JPEG", quality=85)
+                kind = "jpeg"
+    except OSError:
+        return None
+    return f"data:image/{kind};base64," + base64.b64encode(buffer.getvalue()).decode()
 
 
 def line_icon_url(shapes):
@@ -1074,7 +1339,7 @@ def show_landing(df):
             f"""
         <div class="landing">
             <h1>📋 <span>개인용</span> 관리판</h1>
-            <p class="intro">여러 고객사 업무를 한 화면에</p>
+            <p class="intro">대표의 입장에서 생각하고, 실행까지 함께합니다</p>
             {morning_briefing(df)}
             <div class="icons">
                 <div class="icon">
@@ -1251,33 +1516,98 @@ def show_chatbot():
         <style>
         .st-key-chatbot {
             position: fixed;
-            right: 24px;
-            bottom: 24px;
+            right: 32px;
+            bottom: 32px;
             width: auto !important;
             z-index: 1000;
         }
+        /* 챗봇 단추는 처음 크기(64px)의 1.5배. 안의 ✨ 그림도 1.5배로 키워 꽉 차 보이게 한다 */
         .st-key-chatbot button {
-            width: 64px;
-            height: 64px;
+            width: 96px;
+            height: 96px;
+            padding: 0;
             border-radius: 50%;
-            font-size: 32px;
+            font-size: 48px;
             background: #ffd43b;
             border: none;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+        }
+        .st-key-chatbot button p {
+            font-size: 48px;
+            line-height: 1;
+            margin: 0;
+        }
+        /* 큰 단추가 화면 맨 아래 글과 버튼을 가리지 않도록, 끝까지 내리면 단추 높이만큼 빈자리가 남게 한다 */
+        [data-testid="stMainBlockContainer"] {
+            padding-bottom: 144px;
+        }
+        /* 휴대폰처럼 좁은 화면에서는 처음 크기의 1.2배로 줄이고, 가장자리 여백도 줄인다 */
+        @media (max-width: 640px) {
+            .st-key-chatbot {
+                right: 20px;
+                bottom: 20px;
+            }
+            .st-key-chatbot button {
+                width: 77px;
+                height: 77px;
+                font-size: 38px;
+            }
+            .st-key-chatbot button p {
+                font-size: 38px;
+            }
+            [data-testid="stMainBlockContainer"] {
+                padding-bottom: 112px;
+            }
         }
         .st-key-chatbot button:hover {
             transform: scale(1.08);
         }
-        .st-key-chatbot button svg {
+        /* 단추 오른쪽 작은 ⌄ 화살표를 감춘다. 지금 Streamlit은 화살표를 글자 아이콘으로 aria-hidden 칸에 넣는다.
+           예전 판처럼 svg 그림으로 넣는 경우도 함께 감춘다 */
+        .st-key-chatbot button svg,
+        .st-key-chatbot button [aria-hidden="true"],
+        .st-key-chatbot button [data-testid="stIconMaterial"] {
             display: none;
         }
+        /* 챗봇 대화창: 화면 1·2·3 카드와 같은 간유리 */
         [data-testid="stPopoverBody"] {
             width: 360px;
             max-width: calc(100vw - 32px);
+            background: rgba(255, 255, 255, 0.92);
+            border: 1px solid rgba(255, 255, 255, 0.7);
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(30, 41, 59, 0.18);
+            -webkit-backdrop-filter: blur(12px);
+            backdrop-filter: blur(12px);
+            color: #1E293B;
         }
         </style>
         """
     )
+    # 그림이 있으면 단추를 그림으로 꽉 채우고 ✨ 글자는 감춘다. 없으면 위 꾸밈 그대로 노란 ✨ 마크가 보인다.
+    # 파일이 없을 때는 기억해 두지 않아, 나중에 파일을 넣으면 바로 사진이 나온다
+    face = small_photo_url(str(CHATBOT_FACE_FILE)) if CHATBOT_FACE_FILE.is_file() else None
+    if face:
+        st.html(
+            f"""
+            <style>
+            .st-key-chatbot button {{
+                /* 그림 뒤에 아무 색도 깔지 않아, 그림 가장자리로 흰 테나 노란 테가 비치지 않게 한다 */
+                background-color: transparent;
+                background-image: url("{face}");
+                background-size: {CHATBOT_FACE_ZOOM};
+                background-position: {CHATBOT_FACE_POSITION};
+                background-repeat: no-repeat;
+                /* 그림 자체에 가는 흰 선이 있어 단추 테두리는 따로 두지 않는다 */
+                border: none;
+                box-shadow: 0 4px 14px rgba(30, 41, 59, 0.25);
+            }}
+            .st-key-chatbot button p {{
+                opacity: 0;
+            }}
+            </style>
+            """
+        )
     with st.container(key="chatbot"):
         with st.popover("✨", help="관리판 안내 챗봇"):
             chat_panel()
@@ -1294,8 +1624,10 @@ if st.session_state.screen == "landing":
     show_landing(records)
 else:
     # 화면 1·2·3 배경에도 첫 화면과 같은 사진을 깔고, 연한 하늘색을 FEATURE_BG_OVERLAY_OPACITY만큼 덮어 은은하게 보이게 한다.
-    # 카드(이름표가 card_로 시작하는 칸)는 흰 바탕으로 두어 업무 글씨가 잘 읽히게 한다
+    # 카드(이름표가 card_로 시작하는 칸)와 제목 띠는 첫 화면 유리 판과 똑같은 간유리(흰색 LANDING_PANEL_OPACITY, 흐림 10px,
+    # 테두리, 둥근 모서리 20px, 그림자)로 맞춘다. 탭 줄·사이드바도 어울리는 간유리로 둔다
     feature_overlay = f"rgba(240, 249, 255, {FEATURE_BG_OVERLAY_OPACITY})"
+    card_glass = f"rgba(255, 255, 255, {LANDING_PANEL_OPACITY})"
     st.html(
         f"""
         <style>
@@ -1313,7 +1645,56 @@ else:
             background: transparent;
         }}
         [data-testid="stMain"] [class*="st-key-card_"] {{
-            background: #FFFFFF;
+            background: {card_glass};
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            border-radius: 20px;
+            box-shadow: 0 8px 32px rgba(30, 41, 59, 0.15);
+            -webkit-backdrop-filter: blur(10px);
+            backdrop-filter: blur(10px);
+        }}
+        /* 맨 위 제목 띠: 왼쪽 강조 줄은 두고 나머지는 카드와 같은 간유리로 */
+        [data-testid="stHeading"] h1 {{
+            background: {card_glass} !important;
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            border-left: 4px solid #0284C7 !important;
+            border-radius: 20px !important;
+            box-shadow: 0 8px 32px rgba(30, 41, 59, 0.15);
+            -webkit-backdrop-filter: blur(10px);
+            backdrop-filter: blur(10px);
+        }}
+        /* 카드 안 작은 회색 글씨(마감일·진행상태 줄, 안내 문구)는 간유리 위에서도 읽히게 한 단계 진하게 */
+        [data-testid="stMain"] [class*="st-key-card_"] [data-testid="stCaptionContainer"],
+        [data-testid="stMain"] [class*="st-key-card_"] [data-testid="stCaptionContainer"] * {{
+            color: #475569;
+        }}
+        /* 화면 2 탭 이름 줄과 카드 밖 작은 안내 글은 배경 사진 위에 바로 놓이므로, 옅은 간유리를 깔아 읽히게 한다 */
+        [data-testid="stMain"] [data-baseweb="tab-list"] {{
+            background: rgba(255, 255, 255, 0.75);
+            border-radius: 12px;
+            padding: 0 8px;
+            -webkit-backdrop-filter: blur(8px);
+            backdrop-filter: blur(8px);
+        }}
+        [data-testid="stMain"] [data-baseweb="tab-list"] button p {{
+            color: #1E293B;
+            font-weight: 600;
+        }}
+        [data-testid="stMain"] [data-testid="stCaptionContainer"] {{
+            color: #334155;
+        }}
+        /* 사이드바: 같은 간유리 */
+        [data-testid="stSidebar"] {{
+            background: rgba(255, 255, 255, 0.78) !important;
+            border-right: 1px solid rgba(255, 255, 255, 0.7);
+            box-shadow: 4px 0 24px rgba(30, 41, 59, 0.10);
+            -webkit-backdrop-filter: blur(12px);
+            backdrop-filter: blur(12px);
+        }}
+        [data-testid="stSidebarContent"] {{
+            background: transparent;
+        }}
+        [data-testid="stSidebar"] :is(p, span, label) {{
+            color: #1E293B;
         }}
         /* 휴대폰이 다크 모드여도 흰 카드 위 글자가 보이도록, 카드 안 글자는 진한 색으로 정한다 */
         [data-testid="stMain"] [class*="st-key-card_"] :is(p, li, span, label, h1, h2, h3, h4, h5, h6, div[data-testid="stMarkdownContainer"]) {{
@@ -1350,7 +1731,7 @@ else:
             color: #1E293B !important;
             background: #F0F9FF;
             border-left: 4px solid #0284C7;
-            border-radius: 6px;
+            border-radius: 12px;
             padding: 8px 14px !important;
             margin: 0 0 8px !important;
             text-align: left;

@@ -3,4 +3,5 @@ pandas
 python-dotenv
 google-genai
 supabase
+pillow
 requests
