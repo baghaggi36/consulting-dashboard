@@ -1096,6 +1096,8 @@ LANDING_BG_FILE = Path(__file__).parent / "assets" / "autumn_sky.jpg"
 # 첫 화면 카드 맨 아래 「시작하기」 밑에 두는 로고와 서명 한 줄
 LANDING_LOGO_FILE = Path(__file__).parent / "assets" / "logo_gonggam_mark_only.png"
 LANDING_SIGNATURE = "(주)공감경영컨설팅 박학기 본부장"
+# 서명 바로 아래 작은 회색 글씨로 보여 주는 마지막 고친 날과 고친 내용
+LANDING_UPDATED_NOTE = "마지막으로 고친 날 2026-11-03 · 첫 화면 부제목과 연습용 기록장을 넣음"
 # 오른쪽 아래 챗봇 단추에 넣는 로봇 그림. 파일이 없거나 못 읽으면 원래 ✨ 마크를 보여 준다
 CHATBOT_FACE_FILE = Path(__file__).parent / "assets" / "bot_robot.png"
 # 동그란 단추 안에서 그림을 얼마나 키우고(배경 크기) 어디를 가운데에 둘지(가로 세로 위치).
@@ -1279,6 +1281,13 @@ def show_landing(df):
             height: 36px;
             width: auto;
         }
+        /* 서명 바로 아래 마지막 고친 날 한 줄: 서명보다 작은 회색 글씨 */
+        .landing-updated {
+            margin: 6px auto 0;
+            text-align: center;
+            font-size: 13px;
+            color: #64748B;
+        }
         .landing-sign p {
             margin: 0;
             font-size: 17px;
@@ -1300,6 +1309,7 @@ def show_landing(df):
             .landing-sign { flex-direction: column; gap: 6px; }
             .landing-sign img { height: 32px; }
             .landing-sign p { font-size: 16px; }
+            .landing-updated { font-size: 12px; }
             .st-key-landing_panel { margin: 16px auto; padding: 24px 16px; }
         }
         </style>
@@ -1370,6 +1380,7 @@ def show_landing(df):
             <img src="{image_data_url(str(LANDING_LOGO_FILE))}" alt="공감 로고">
             <p>{html.escape(LANDING_SIGNATURE)}</p>
         </div>
+        <p class="landing-updated">{html.escape(LANDING_UPDATED_NOTE)}</p>
         """
         )
 
