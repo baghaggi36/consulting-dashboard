@@ -24,6 +24,8 @@ MEMO_TABLE = "client_memos"
 WORK_TABLE = "work_records"
 # 화면 1에서 추가한 고객사를 담는 표
 CLIENT_TABLE = "clients"
+# 사이드바 「연습용 기록장」에서 쓰고 읽는 표. owner(이름)·note(글 한 줄)·created_at(남긴 시각) 열을 쓴다
+PRACTICE_TABLE = "practice_notes"
 # 화면 2 「인증 만료」 탭에서 쓰고 읽는 고객사별 인증 표
 CERT_TABLE = "client_certifications"
 # 인증 이름 고르는 칸의 목록. 맨 끝 「직접 입력」을 고르면 글 칸이 열린다
@@ -1509,6 +1511,71 @@ def chat_panel():
     show_chat_logs()
 
 
+def save_practice_note():
+    """연습용 기록장의 이름과 글 한 줄을 practice_notes 표에 넣는다. 이름이나 글이 비어 있으면 넣지 않는다.
+    결과 안내는 다시 그린 기록장에 보여 주도록 남겨 둔다."""
+    owner = st.session_state.get("practice_owner", "").strip()
+    note = st.session_state.get("practice_note", "").strip()
+    if not owner:
+        st.session_state.practice_message = ("warning", "이름을 먼저 넣어 주세요")
+        return
+    if not note:
+        st.session_state.practice_message = ("warning", "남길 글을 한 줄 적어 주세요")
+        return
+    try:
+        get_supabase().table(PRACTICE_TABLE).insert({"owner": owner, "note": note}).execute()
+    except Exception as e:
+        st.session_state.practice_message = ("error", f"글을 저장하지 못했습니다: {e}")
+        return
+    st.session_state.practice_note = ""
+    st.session_state.practice_message = ("success", "글을 남겼습니다")
+
+
+def show_practice_notes():
+    """화면 1·2·3 사이드바의 접었다 펴는 「연습용 기록장」. 이름과 글 한 줄을 남기고,
+    아래 목록에는 owner가 넣은 이름과 같은 글만 최근 것부터 보여 준다. 이름이 비어 있으면 저장도 목록도 막는다."""
+    with st.sidebar.expander("📝 연습용 기록장"):
+        st.text_input("이름", key="practice_owner", placeholder="예: 미카엘")
+        st.text_input("글 한 줄", key="practice_note", max_chars=300)
+        st.button("남기기", key="practice_save", use_container_width=True, on_click=save_practice_note)
+
+        # 바로 앞에서 남긴 결과를 한 번만 보여 준다
+        message = st.session_state.pop("practice_message", None)
+        if message:
+            kind, text = message
+            {"success": st.success, "warning": st.warning}.get(kind, st.error)(text)
+
+        owner = st.session_state.get("practice_owner", "").strip()
+        if not owner:
+            # 「남기기」를 눌러 이미 이름 안내가 나왔으면 같은 안내를 두 번 띄우지 않는다
+            if not message:
+                st.warning("이름을 넣어야 글을 남기고 목록을 볼 수 있어요")
+            return
+        try:
+            notes = (
+                get_supabase()
+                .table(PRACTICE_TABLE)
+                .select("note, created_at")
+                .eq("owner", owner)
+                .order("created_at", desc=True)
+                .execute()
+                .data
+            )
+        except Exception as e:
+            st.error(f"지난 글을 불러오지 못했습니다: {e}")
+            return
+
+        if not notes:
+            st.caption(f"{owner}님이 남긴 글이 아직 없습니다")
+        for n in notes:
+            if n["created_at"]:
+                # 시간대가 없는 시각이 와도 세계 표준시로 보고 한국 시간으로 바꾼다
+                written = pd.to_datetime(n["created_at"], utc=True).tz_convert("Asia/Seoul")
+                st.write(f"{written:%Y-%m-%d %H:%M} · {n['note']}")
+            else:
+                st.write(n["note"])
+
+
 def show_chatbot():
     """오른쪽 아래에 떠 있는 동그란 챗봇 아이콘. 누르면 대화창이 열린다."""
     st.html(
@@ -1772,6 +1839,8 @@ else:
 
     # 기능 화면에서만 사이드바에 첫 화면으로 돌아가는 버튼을 둔다
     st.sidebar.button("← 첫 화면으로", use_container_width=True, on_click=go, args=("landing",))
+    # 사이드바 아래에 연습용 기록장을 접어 둔다
+    show_practice_notes()
 
     if st.session_state.screen == "detail":
         show_detail(records)
