@@ -4,6 +4,7 @@ import io
 import os
 import re
 import zlib
+from collections.abc import Mapping
 from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -1698,8 +1699,28 @@ def start_google_login():
     """구글 로그인 창으로 보낸다. 로그인 설정(.streamlit/secrets.toml의 [auth])이 아직 없으면 안내만 남긴다."""
     try:
         st.login("google")
-    except StreamlitAuthError:
-        st.session_state.login_error = True
+    except StreamlitAuthError as error:
+        st.session_state.login_error = hide_auth_secrets(str(error))
+
+
+def hide_auth_secrets(message):
+    """로그인 오류 문장에 [auth] 아래 값(client_secret, cookie_secret 등)이 섞여 있으면 ***로 가린다."""
+    values = []
+
+    def collect(section):
+        for value in section.values():
+            if isinstance(value, Mapping):
+                collect(value)
+            elif isinstance(value, str) and value:
+                values.append(value)
+
+    try:
+        collect(st.secrets.get("auth", {}))
+    except Exception:
+        pass
+    for value in sorted(values, key=len, reverse=True):
+        message = message.replace(value, "***")
+    return " ".join(message.split())
 
 
 def show_login_gate():
@@ -1734,8 +1755,11 @@ def show_login_gate():
     with st.container(key="login_panel"):
         st.html("<h2>개인용 관리판</h2><p>구글 계정으로 들어오면 관리판이 열립니다</p>")
         st.button("구글 계정으로 들어가기", type="primary", use_container_width=True, on_click=start_google_login)
-        if st.session_state.pop("login_error", False):
+        login_error = st.session_state.pop("login_error", None)
+        if login_error:
             st.error("구글 로그인 설정이 아직 없습니다. .streamlit/secrets.toml의 [auth] 칸을 채운 뒤 다시 눌러 주세요")
+            # Streamlit이 알려 준 실제 원인 문장. 키 값은 hide_auth_secrets로 가린 뒤 보여 준다
+            st.caption(f"Streamlit 오류 문장: {login_error}")
 
 
 def show_user_bar():
