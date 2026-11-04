@@ -5,3 +5,4 @@ google-genai
 supabase
 pillow
 requests
+Authlib>=1.3.2

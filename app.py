@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 import pandas as pd
 import streamlit as st
+from streamlit.errors import StreamlitAuthError
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -1100,6 +1101,8 @@ LANDING_SIGNATURE = "(주)공감경영컨설팅 박학기 본부장"
 LANDING_UPDATED_NOTE = "마지막으로 고친 날 2026-11-03 · 첫 화면 부제목과 연습용 기록장을 넣음"
 # 오른쪽 아래 챗봇 단추에 넣는 로봇 그림. 파일이 없거나 못 읽으면 원래 ✨ 마크를 보여 준다
 CHATBOT_FACE_FILE = Path(__file__).parent / "assets" / "bot_robot.png"
+# 오른쪽 위 「이름 님」 앞에 두는 내 사진. 파일이 없거나 못 읽으면 👤를 보여 준다
+USER_PHOTO_FILE = Path(__file__).parent / "assets" / "me.jpg"
 # 동그란 단추 안에서 그림을 얼마나 키우고(배경 크기) 어디를 가운데에 둘지(가로 세로 위치).
 # 로봇 그림은 동그라미가 그림 폭의 약 96%이고 바깥은 투명하다. 동그라미가 단추를 꽉 채워 바깥 틈이 보이지 않도록 105%로 키운다
 CHATBOT_FACE_ZOOM = "105%"
@@ -1691,8 +1694,99 @@ def show_chatbot():
             chat_panel()
 
 
+def start_google_login():
+    """구글 로그인 창으로 보낸다. 로그인 설정(.streamlit/secrets.toml의 [auth])이 아직 없으면 안내만 남긴다."""
+    try:
+        st.login("google")
+    except StreamlitAuthError:
+        st.session_state.login_error = True
+
+
+def show_login_gate():
+    """구글 계정으로 들어오기 전에는 이 안내 화면만 보여 주고, 아래 화면들은 그리지 않는다."""
+    st.html(
+        """
+        <style>
+        [data-testid="stApp"] {
+            background: #F0F9FF;
+            color: #1E293B;
+        }
+        .st-key-login_panel {
+            max-width: 480px;
+            margin: 80px auto;
+            padding: 40px 32px;
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 20px;
+            box-shadow: 0 8px 32px rgba(30, 41, 59, 0.12);
+            text-align: center;
+        }
+        .st-key-login_panel h2 {
+            color: #1E293B;
+            margin: 0 0 8px;
+        }
+        .st-key-login_panel p {
+            color: #475569;
+        }
+        </style>
+        """
+    )
+    with st.container(key="login_panel"):
+        st.html("<h2>개인용 관리판</h2><p>구글 계정으로 들어오면 관리판이 열립니다</p>")
+        st.button("구글 계정으로 들어가기", type="primary", use_container_width=True, on_click=start_google_login)
+        if st.session_state.pop("login_error", False):
+            st.error("구글 로그인 설정이 아직 없습니다. .streamlit/secrets.toml의 [auth] 칸을 채운 뒤 다시 눌러 주세요")
+
+
+def show_user_bar():
+    """모든 화면 맨 위 오른쪽에 들어온 사람의 이름과 「나가기」를 보여 준다."""
+    name = st.user.get("name") or st.user.get("email") or "사용자"
+    st.html(
+        """
+        <style>
+        .st-key-user_bar {
+            display: flex;
+            flex-direction: row;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 8px;
+        }
+        .st-key-user_bar > div {
+            width: auto !important;
+        }
+        .st-key-user_bar .user-name {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin: 0;
+            font-size: 15px;
+            font-weight: 600;
+            color: #1E293B;
+        }
+        .st-key-user_bar .user-name img {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            object-fit: cover;
+        }
+        </style>
+        """
+    )
+    photo = small_photo_url(str(USER_PHOTO_FILE), 96) if USER_PHOTO_FILE.exists() else None
+    mark = f'<img src="{photo}" alt="">' if photo else "👤"
+    with st.container(key="user_bar"):
+        st.html(f'<p class="user-name">{mark} {html.escape(name)} 님</p>')
+        st.button("나가기", key="logout", on_click=st.logout)
+
+
 # 열을 나란히 두려면 화면 너비를 넓게 쓴다. 브라우저 탭에는 이름과 📋 그림을 보여 준다
 st.set_page_config(page_title="개인용 관리판", page_icon="📋", layout="wide")
+
+# 구글 계정으로 들어온 사람만 화면을 본다. 들어오기 전에는 안내 화면만 그리고 멈춘다
+if not st.user.is_logged_in:
+    show_login_gate()
+    st.stop()
+show_user_bar()
 
 records = load_records()
 # 앱을 열면 서비스 소개 첫 화면이 먼저 뜬다
