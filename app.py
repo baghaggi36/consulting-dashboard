@@ -106,6 +106,10 @@ CHAT_ANSWER_MAX_CHARS = 300
 CHAT_NO_INFO_PREFIX = "PRD에는 그 내용이 없습니다"
 # 두 번 다 점검을 통과하지 못하면 답 대신 띄우는 글
 CHAT_RETRY_TEXT = "다시 시도해 주세요"
+# 둘러보기(보기만)로 들어온 사람이 한 번 들어와 챗봇에 물을 수 있는 횟수
+GUEST_CHAT_LIMIT = 5
+# 둘러보기에서 쓰기 칸·버튼 자리에 대신 보여 주는 안내
+GUEST_NOTE = "둘러보기에서는 보기만 할 수 있습니다"
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -122,6 +126,12 @@ def load_records():
     df["due_date"] = pd.to_datetime(df["due_date"]).dt.date
     df["important"] = df["important"] == "Y"
     return df
+
+
+def is_guest():
+    """로그인 화면에서 「👀 둘러보기 (보기만)」로 들어왔는지. 구글 계정으로 들어왔으면 둘러보기가 아니다.
+    둘러보기에서는 쓰기 칸·버튼을 숨기고, Supabase에 쓰는 함수도 맨 앞에서 그냥 돌아간다."""
+    return bool(st.session_state.get("guest")) and not st.user.is_logged_in
 
 
 def seoul_today():
@@ -398,6 +408,9 @@ def show_home(df):
                 st.rerun()
         st.caption("선택 후 확인 → 화면 2로 이동")
 
+        if is_guest():
+            st.caption(GUEST_NOTE)
+            return
         st.text_input("새 고객사 이름", key="new_client_name", placeholder="예: 하늘상사")
         st.button("고객사 추가", use_container_width=True, on_click=add_client, args=(names,))
         # 바로 앞에서 추가한 결과를 한 번만 보여 준다
@@ -431,6 +444,8 @@ def client_names(df):
 def add_client(existing):
     """「새 고객사 이름」 칸의 이름을 clients 표에 넣고, 선택 칸에서 그 고객사를 골라 둔다.
     비어 있거나 이미 있는 이름이면 넣지 않는다. 결과 안내는 다시 그린 화면 1에 보여 주도록 남겨 둔다."""
+    if is_guest():
+        return
     name = st.session_state.get("new_client_name", "").strip()
     if not name:
         st.session_state.client_add_message = ("warning", "추가할 고객사 이름을 먼저 입력해 주세요")
@@ -456,14 +471,19 @@ def show_memos(client):
     with st.container(border=True, key="card_memo"):
         st.subheader("⑤ 한 줄 메모")
 
-        with st.form("memo_form", clear_on_submit=True):
-            memo = st.text_input(
-                "한 줄 메모",
-                max_chars=300,
-                placeholder="이 고객사에 대해 남길 메모를 한 줄로 적어 주세요",
-                label_visibility="collapsed",
-            )
-            submitted = st.form_submit_button("남기기", use_container_width=True)
+        # 둘러보기에서는 메모 입력 칸 대신 안내만 두고, 아래 메모 목록은 그대로 보여 준다
+        submitted = False
+        if is_guest():
+            st.caption(GUEST_NOTE)
+        else:
+            with st.form("memo_form", clear_on_submit=True):
+                memo = st.text_input(
+                    "한 줄 메모",
+                    max_chars=300,
+                    placeholder="이 고객사에 대해 남길 메모를 한 줄로 적어 주세요",
+                    label_visibility="collapsed",
+                )
+                submitted = st.form_submit_button("남기기", use_container_width=True)
 
         if submitted:
             if not memo.strip():
@@ -705,6 +725,8 @@ def clear_cert_form():
 def save_cert(client):
     """인증 입력 칸의 값을 저장한다. 고른 인증이 있으면 그 인증을 고치고, 없으면 지금 보고 있는 고객사의 인증으로 새로 넣는다.
     인증 이름은 앞뒤 빈칸을 지워 저장한다. 결과 안내는 다시 그린 탭에 보여 주도록 남겨 둔다."""
+    if is_guest():
+        return
     cert_type = st.session_state.get("cert_type")
     if cert_type == CERT_CUSTOM:
         name = st.session_state.get("cert_custom", "").strip()
@@ -765,6 +787,8 @@ def cancel_delete_cert():
 def delete_cert(cert_id):
     """인증 하나를 Supabase 인증 표에서 지운다. 고른 인증이었다면 입력 칸도 비운다."""
     st.session_state.pop("deleting_cert_id", None)
+    if is_guest():
+        return
     try:
         deleted = get_supabase().table(CERT_TABLE).delete().eq("id", cert_id).execute().data
     except Exception as e:
@@ -834,6 +858,9 @@ def show_certs(client):
                     f"**{html.escape(cert['cert_name'])}** · 만료 {expires} {cert_d_day_badge(expires)}",
                     unsafe_allow_html=True,
                 )
+                # 둘러보기에서는 목록만 보여 주고 「고르기」·「삭제」는 두지 않는다
+                if is_guest():
+                    continue
                 right.button("고르기", key=f"cert_pick_{cert['id']}", on_click=pick_cert, args=(client, cert))
                 right.button("삭제", key=f"cert_delete_{cert['id']}", on_click=ask_delete_cert, args=(cert["id"],))
                 if picked and picked["id"] == cert["id"]:
@@ -857,6 +884,9 @@ def show_certs(client):
                     )
 
         st.divider()
+        if is_guest():
+            st.caption(GUEST_NOTE)
+            return
         if picked:
             st.info(f"고른 인증: {picked['cert_name']} · 만료 {picked['expires_on']}")
         type_col, custom_col, expires_col = st.columns(3)
@@ -914,6 +944,8 @@ def delete_record(record_id):
     """기존 기록 하나를 Supabase 업무 기록 표에서 지운다. 고른 기록이었다면 입력 칸도 비운다.
     결과는 다시 그린 목록 위에 보여 주도록 남겨 둔다."""
     st.session_state.pop("deleting_record_id", None)
+    if is_guest():
+        return
     try:
         deleted = (
             get_supabase().table(WORK_TABLE).delete().eq("id", record_id).execute().data
@@ -984,6 +1016,9 @@ def show_work_records(client):
                     left.caption(f"다음 할 일 {r['next_step']} · 마감 {r['due_date']}")
                     left.caption(f"파일 위치 {r['file_location']}")
                     left.caption(f"수정내용 {r['revision_note']}")
+                    # 둘러보기에서는 목록만 보여 주고 「고르기」·「삭제」는 두지 않는다
+                    if is_guest():
+                        continue
                     right.button(
                         "고르기",
                         key=f"pick_{r['id']}",
@@ -1024,6 +1059,11 @@ def show_record_form(client):
     """화면 3의 업무 기록 입력 칸 6개와 저장 버튼. 저장하면 고른 기록은 바꾸고, 아니면 Supabase 업무 기록 표에 새로 넣는다."""
     with st.container(border=True, key="card_record_form"):
         st.subheader("업무 기록 입력")
+
+        # 둘러보기에서는 입력 칸·「새로 쓰기」·「저장」을 두지 않는다
+        if is_guest():
+            st.caption(GUEST_NOTE)
+            return
 
         # 다른 고객사에서 골라 둔 기록은 보여 주지 않는다
         picked = st.session_state.get("picked_record")
@@ -1514,7 +1554,9 @@ def ask_chatbot_checked(api_key, messages):
 
 
 def save_chat_log(question, answer):
-    """물은 말과 받은 답을 Supabase 대화 기록 표에 남긴다."""
+    """물은 말과 받은 답을 Supabase 대화 기록 표에 남긴다. 둘러보기의 질문은 남기지 않는다."""
+    if is_guest():
+        return
     get_supabase().table(CHAT_LOG_TABLE).insert(
         {"question": question, "answer": answer}
     ).execute()
@@ -1570,6 +1612,13 @@ def chat_panel():
                 else:
                     st.write(m["text"])
 
+    # 둘러보기에서는 한 번 들어와 GUEST_CHAT_LIMIT번까지만 묻는다. 다 쓰면 입력 칸 대신 안내만 둔다
+    guest = is_guest()
+    asked = st.session_state.get("guest_chat_count", 0)
+    if guest and asked >= GUEST_CHAT_LIMIT:
+        st.info(f"둘러보기에서는 {GUEST_CHAT_LIMIT}번까지 물어볼 수 있어요")
+        return
+
     with st.form("chat_form", clear_on_submit=True, border=False):
         question = st.text_input(
             "질문",
@@ -1577,6 +1626,8 @@ def chat_panel():
             label_visibility="collapsed",
         )
         sent = st.form_submit_button("보내기", use_container_width=True)
+    if guest:
+        st.caption(f"둘러보기 질문은 저장하지 않아요 · 남은 횟수 {GUEST_CHAT_LIMIT - asked}번")
 
     if sent:
         api_key = os.environ.get("GEMINI_API_KEY")
@@ -1595,6 +1646,9 @@ def chat_panel():
                 else:
                     answer = answer or "(받은 답이 비어 있습니다.)"
                     messages.append({"role": "model", "text": answer})
+                    if guest:
+                        st.session_state.guest_chat_count = asked + 1
+                        st.rerun(scope="fragment")
                     try:
                         save_chat_log(question.strip(), answer)
                         st.session_state.pop("chat_log_error", None)
@@ -1606,6 +1660,9 @@ def chat_panel():
     if "chat_log_error" in st.session_state:
         st.warning(f"대화를 기록하지 못했습니다: {st.session_state.chat_log_error}")
 
+    # 지난 대화 목록은 미카엘의 질문이라 둘러보기에서는 숨긴다
+    if guest:
+        return
     st.divider()
     show_chat_logs()
 
@@ -1613,6 +1670,8 @@ def chat_panel():
 def save_practice_note():
     """연습용 기록장의 이름과 글 한 줄을 practice_notes 표에 넣는다. 이름이나 글이 비어 있으면 넣지 않는다.
     결과 안내는 다시 그린 기록장에 보여 주도록 남겨 둔다."""
+    if is_guest():
+        return
     owner = st.session_state.get("practice_owner", "").strip()
     note = st.session_state.get("practice_note", "").strip()
     if not owner:
@@ -1807,6 +1866,18 @@ def hide_auth_secrets(message):
     return " ".join(message.split())
 
 
+def start_guest():
+    """로그인 없이 보기만 하는 둘러보기로 들어간다. 첫 화면부터 보여 준다."""
+    st.session_state.guest = True
+    st.session_state.screen = "landing"
+
+
+def end_guest():
+    """둘러보기를 마치고 로그인 화면으로 돌아간다. 다음 사람이 처음부터 보도록 화면 위치와 챗봇 대화도 지운다."""
+    for key in ("guest", "screen", "client", "chat_messages", "guest_chat_count"):
+        st.session_state.pop(key, None)
+
+
 def show_login_gate():
     """구글 계정으로 들어오기 전에는 이 안내 화면만 보여 주고, 아래 화면들은 그리지 않는다."""
     st.html(
@@ -1839,6 +1910,7 @@ def show_login_gate():
     with st.container(key="login_panel"):
         st.html("<h2>개인용 관리판</h2><p>구글 계정으로 들어오면 관리판이 열립니다</p>")
         st.button("구글 계정으로 들어가기", type="primary", use_container_width=True, on_click=start_google_login)
+        st.button("👀 둘러보기 (보기만)", use_container_width=True, on_click=start_guest)
         login_error = st.session_state.pop("login_error", None)
         if login_error:
             st.error("구글 로그인 설정이 아직 없습니다. .streamlit/secrets.toml의 [auth] 칸을 채운 뒤 다시 눌러 주세요")
@@ -1847,8 +1919,8 @@ def show_login_gate():
 
 
 def show_user_bar():
-    """모든 화면 맨 위 오른쪽에 들어온 사람의 이름과 「나가기」를 보여 준다."""
-    name = st.user.get("name") or st.user.get("email") or "사용자"
+    """모든 화면 맨 위 오른쪽에 들어온 사람의 이름과 「나가기」를 보여 준다.
+    둘러보기면 「👀 둘러보는 중」과 「나가기」를 보여 주고, 나가기를 누르면 로그인 화면으로 돌아간다."""
     st.html(
         """
         <style>
@@ -1880,6 +1952,12 @@ def show_user_bar():
         </style>
         """
     )
+    if is_guest():
+        with st.container(key="user_bar"):
+            st.html('<p class="user-name">👀 둘러보는 중</p>')
+            st.button("나가기", key="logout", on_click=end_guest)
+        return
+    name = st.user.get("name") or st.user.get("email") or "사용자"
     photo = small_photo_url(str(USER_PHOTO_FILE), 96) if USER_PHOTO_FILE.exists() else None
     mark = f'<img src="{photo}" alt="">' if photo else "👤"
     with st.container(key="user_bar"):
@@ -1890,8 +1968,9 @@ def show_user_bar():
 # 열을 나란히 두려면 화면 너비를 넓게 쓴다. 브라우저 탭에는 이름과 📋 그림을 보여 준다
 st.set_page_config(page_title="개인용 관리판", page_icon="📋", layout="wide")
 
-# 구글 계정으로 들어온 사람만 화면을 본다. 들어오기 전에는 안내 화면만 그리고 멈춘다
-if not st.user.is_logged_in:
+# 구글 계정으로 들어온 사람과 「둘러보기 (보기만)」로 들어온 사람만 화면을 본다.
+# 둘 다 아니면 안내 화면만 그리고 멈춘다
+if not st.user.is_logged_in and not is_guest():
     show_login_gate()
     st.stop()
 show_user_bar()
@@ -2061,8 +2140,9 @@ else:
 
     # 기능 화면에서만 사이드바에 첫 화면으로 돌아가는 버튼을 둔다
     st.sidebar.button("← 첫 화면으로", use_container_width=True, on_click=go, args=("landing",))
-    # 사이드바 아래에 연습용 기록장을 접어 둔다
-    show_practice_notes()
+    # 사이드바 아래에 연습용 기록장을 접어 둔다. 둘러보기에서는 기록장을 두지 않는다
+    if not is_guest():
+        show_practice_notes()
 
     if st.session_state.screen == "detail":
         show_detail(records)
