@@ -5,7 +5,7 @@ import os
 import re
 import zlib
 from collections.abc import Mapping
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote
@@ -55,8 +55,19 @@ LANDING_BG_OVERLAY_OPACITY = 0.45
 LANDING_PANEL_OPACITY = 0.25
 # 화면 1·2·3 배경 사진 위에 덮는 연한 하늘색(#F0F9FF)의 진하기. 첫 화면 것과 따로 둔다
 FEATURE_BG_OVERLAY_OPACITY = 0.55
-# 화면 1 「마감일이 가까운 업무」에서 마감 지난 업무와 아직 남은 업무를 묶음마다 몇 개까지 보여 줄지
+# 화면 1 「마감 챙길 업무」에서 8일 이상 남은 업무를 몇 개까지 보여 줄지
 DUE_GROUP_LIMIT = 3
+# 마감까지 이 날수 이내(D-7~D-day)면 「마감 임박」으로 맨 위에 주황으로 크게 보여 준다
+DUE_SOON_DAYS = 7
+# 마감 임박 가운데 이 날수 이내(D-3~D-day)는 조금 더 진한 주황으로 보여 준다
+DUE_URGENT_DAYS = 3
+# 마감 표시 뱃지의 (바탕색, 글자색). urgent=D-3 이내, soon=D-4~D-7, later=8일 이상, past=마감 지남
+DUE_BADGE_COLORS = {
+    "urgent": ("#FDBA74", "#9A3412"),
+    "soon": ("#FFEDD5", "#C2410C"),
+    "later": ("#DBEAFE", "#1D4ED8"),
+    "past": ("#FDE2E2", "#B91C1C"),
+}
 # 고객사 표시(색 동그라미 안 첫 글자)에 돌려 쓰는 색. 흰 굵은 글씨가 잘 읽히는 진하기로 고르고,
 # 「마감 지남」 표시와 헷갈리지 않도록 빨간 계열은 넣지 않는다
 CLIENT_MARK_COLORS = (
@@ -151,34 +162,54 @@ def cert_d_day_badge(expires_on):
     )
 
 
-def due_mark(due):
-    """화면 1 「마감일이 가까운 업무」에 붙일 표시와 날짜 글을 돌려준다.
-    마감이 지났으면 빨간 「마감 지남」과 "19일 지남", 오늘이면 주황 「오늘 마감」, 아직 남았으면 "D-3"."""
+def due_level(due):
+    """마감일까지 남은 날로 묶음을 정한다. 날짜는 seoul_today() 기준이다.
+    지났으면 "past", D-3~D-day면 "urgent", D-4~D-7이면 "soon", 8일 이상이면 "later"."""
     days = (due - seoul_today()).days
     if days < 0:
-        return ":red-badge[마감 지남]", f"{-days}일 지남"
-    if days == 0:
-        return ":orange-badge[오늘 마감]", ""
-    return "", f"D-{days}"
+        return "past"
+    if days <= DUE_URGENT_DAYS:
+        return "urgent"
+    if days <= DUE_SOON_DAYS:
+        return "soon"
+    return "later"
 
 
-def morning_briefing(df):
-    """첫 화면 「아침 브리핑」 한 줄을 HTML로 돌려준다. 예: 10월 31일 토요일 · 마감 지난 일 3건 · 이번 주 마감 2건.
+def due_badge(due):
+    """화면 1 「마감 챙길 업무」 줄 맨 앞에 붙일 둥근 뱃지를 HTML로 돌려준다. 색은 due_level()로 정한다.
+    예: 「19일 지남」, 「오늘 마감」, 「D-3」."""
+    days = (due - seoul_today()).days
+    if days < 0:
+        label = f"{-days}일 지남"
+    elif days == 0:
+        label = "오늘 마감"
+    else:
+        label = f"D-{days}"
+    background, color = DUE_BADGE_COLORS[due_level(due)]
+    return (
+        f'<span style="display:inline-block;padding:1px 8px;border-radius:999px;'
+        f'background:{background};color:{color};font-weight:700;">{label}</span>'
+    )
+
+
+def morning_briefing():
+    """첫 화면 「아침 브리핑」 한 줄을 HTML로 돌려준다. 예: 10월 31일 토요일 · 마감 임박 2건 · 마감 지난 일 3건.
     날짜는 화면 1과 같은 seoul_today()로 정한다.
-    화면 1 「마감 챙길 업무」와 같은 자료(df)에서 '완료'가 아닌 업무만 센다.
-    이번 주 마감은 오늘부터 6일 뒤까지(오늘 포함 7일) 마감인 업무다. 마감 지난 일 숫자만 둥근 빨간 뱃지로 보여 준다."""
+    화면 1 「마감 챙길 업무」와 같은 Supabase 업무 기록(due_rows)으로 센다. '완료'와 마감일 없는 업무는 이미 빠져 있다.
+    마감 임박은 오늘부터 DUE_SOON_DAYS일 뒤까지(D-7~D-day) 마감인 업무로, 화면 1 맨 위 주황 묶음과 같다.
+    마감 임박 숫자는 둥근 주황 뱃지, 마감 지난 일 숫자는 둥근 빨간 뱃지로 보여 준다."""
     today = seoul_today()
-    dues = df.loc[df["status"] != "완료", "due_date"].dropna()
-    overdue = int((dues < today).sum())
-    this_week = int(((dues >= today) & (dues <= today + timedelta(days=6))).sum())
+    levels = [due_level(row.due_date) for row in due_rows()]
+    overdue = levels.count("past")
+    soon = levels.count("urgent") + levels.count("soon")
 
     weekday = "월화수목금토일"[today.weekday()]
     day_text = f"{today.month}월 {today.day}일 {weekday}요일"
+    soon_text = f'마감 임박 <span class="soon">{soon}</span>건' if soon else "마감 임박 없음"
     overdue_text = (
         f'마감 지난 일 <span class="overdue">{overdue}</span>건' if overdue else "마감 지난 일 없음"
     )
-    week_text = f"이번 주 마감 {this_week}건" if this_week else "이번 주 마감 없음"
-    return f'<p class="briefing">{day_text} · {overdue_text} · {week_text}</p>'
+    return f'<p class="briefing">{day_text} · {soon_text} · {overdue_text}</p>'
 
 
 def go(screen, client=None):
@@ -211,16 +242,17 @@ def client_badge(name):
     )
 
 
-def task_row(row, label, key, badge=""):
+def task_row(row, label, key, badge="", size=None):
     left, right = st.columns([6, 1])
     # 표시(badge)가 있으면 맨 앞에 두고, 날짜 글(label)이 비었으면 굵은 글씨를 빼고 쓴다
     head = " ".join(part for part in (badge, f"**{label}**" if label else "") if part)
     # 고객사 표시를 그리려고 HTML을 허용하므로, 입력받은 글은 그대로 글자로 보이게 바꿔 넣는다
     name = html.escape(row.client_name)
-    left.markdown(
-        f"{head} {client_badge(row.client_name)}{name} · {html.escape(str(row.next_step))}",
-        unsafe_allow_html=True,
-    )
+    text = f"{head} {client_badge(row.client_name)}{name} · {html.escape(str(row.next_step))}"
+    # size를 주면(예: "1.15em") 그 줄 글자 크기만 바꾼다
+    if size:
+        text = f'<span style="font-size:{size};">{text}</span>'
+    left.markdown(text, unsafe_allow_html=True)
     # 마감일이 없는 줄(None)은 「마감일 없음」으로 보여 준다
     due = "마감일 없음" if row.due_date is None else f"마감 {row.due_date}"
     left.caption(f"{due} · {row.status}")
@@ -267,38 +299,79 @@ def important_rows(df):
     return [(row, key) for _, row, key in items]
 
 
+def due_rows():
+    """화면 1 「마감 챙길 업무」에 보일 업무를 Supabase 업무 기록(work_records)에서 마감일 순으로 돌려준다.
+    '완료'인 업무와 마감일이 없는 업무는 뺀다. 샘플 자료(CSV)는 쓰지 않는다."""
+    try:
+        saved = (
+            get_supabase()
+            .table(WORK_TABLE)
+            .select("id, client_name, next_step, due_date, status")
+            .execute()
+            .data
+        )
+    except Exception as e:
+        st.error(f"화면 3에서 저장한 기록을 불러오지 못했습니다: {e}")
+        return []
+
+    # task_row가 CSV 줄과 같은 이름으로 읽을 수 있게 맞추고, 비어 있는 칸은 "-"로 보여 준다
+    rows = [
+        SimpleNamespace(
+            id=r["id"],
+            client_name=r["client_name"],
+            next_step=r["next_step"] or "-",
+            due_date=date.fromisoformat(r["due_date"]),
+            status=r["status"] or "-",
+        )
+        for r in saved
+        if r["due_date"] and r["status"] != "완료"
+    ]
+    rows.sort(key=lambda row: row.due_date)
+    return rows
+
+
 def show_home(df):
     st.title("화면 1 · 오늘의 업무")
-
-    open_tasks = df[df["status"] != "완료"].sort_values("due_date")
 
     # 왼쪽 좁은 열은 고객사 선택, 가운데 넓은 자리는 두 업무 목록을 좌우로 나란히 둔다
     select_col, due_col, star_col = st.columns([1, 1.5, 1.5])
 
     with due_col, st.container(border=True, key="card_due"):
         st.subheader("마감 챙길 업무")
-        # 마감 지난 업무(오래된 순)를 위에, 아직 남은 업무(오늘 마감 포함, 가까운 순)를 아래에 묶음마다 몇 개씩 보여 준다.
-        # open_tasks가 마감일 순이라 두 묶음 모두 이미 원하는 순서다. 빈 묶음은 소제목째 그리지 않는다
-        is_overdue = open_tasks["due_date"] < seoul_today()
-        groups = [
-            (title, g)
-            for title, g in (
-                ("🔴 마감 지남", open_tasks[is_overdue]),
-                ("⏳ 다가오는 마감", open_tasks[~is_overdue]),
-            )
-            if not g.empty
-        ]
-        for i, (title, group) in enumerate(groups):
-            # 두 묶음이 한눈에 나뉘도록 사이에 가는 줄을 긋는다
-            if i > 0:
-                st.divider()
-            st.markdown(f"**{title}**")
-            for row in group.head(DUE_GROUP_LIMIT).itertuples():
-                badge, label = due_mark(row.due_date)
-                task_row(row, label, f"due_{row.record_id}", badge)
-            hidden = len(group) - DUE_GROUP_LIMIT
+        # 맨 위: 마감 임박(D-7~D-day)을 가까운 순으로 모두 주황 뱃지와 큰 글씨로 보여 준다(D-3 이내는 더 진한 주황).
+        # 그 아래: 8일 이상 남은 업무를 파란 뱃지로 평소 크기로 몇 개까지.
+        # 맨 아래: 마감 지난 업무를 「지난 업무 ○건」 접는 상자에 작은 글씨로 넣는다.
+        # due_rows()가 마감일 순이라 세 묶음 모두 이미 가까운(오래된) 순이다
+        rows = due_rows()
+        soon = [r for r in rows if due_level(r.due_date) in ("urgent", "soon")]
+        later = [r for r in rows if due_level(r.due_date) == "later"]
+        past = [r for r in rows if due_level(r.due_date) == "past"]
+
+        st.markdown(
+            f'<span style="color:{DUE_BADGE_COLORS["soon"][1]};font-weight:800;font-size:1.1em;">'
+            f"🔥 마감 임박 (7일 이내)</span>",
+            unsafe_allow_html=True,
+        )
+        with st.container(key="due_soon"):
+            if not soon:
+                st.caption("7일 안에 마감인 업무가 없습니다")
+            for row in soon:
+                task_row(row, "", f"due_saved_{row.id}", due_badge(row.due_date), size="1.15em")
+
+        if later:
+            st.divider()
+            st.markdown("**⏳ 다가오는 마감**")
+            for row in later[:DUE_GROUP_LIMIT]:
+                task_row(row, "", f"due_saved_{row.id}", due_badge(row.due_date))
+            hidden = len(later) - DUE_GROUP_LIMIT
             if hidden > 0:
                 st.caption(f"외 {hidden}건 더")
+
+        if past:
+            st.divider()
+            with st.expander(f"지난 업무 {len(past)}건"):
+                for row in past:
+                    task_row(row, "", f"due_saved_{row.id}", due_badge(row.due_date), size="0.85em")
 
     with star_col, st.container(border=True, key="card_star"):
         st.subheader("중요 표시한 업무")
@@ -1099,7 +1172,7 @@ LANDING_BG_FILE = Path(__file__).parent / "assets" / "autumn_sky.jpg"
 LANDING_LOGO_FILE = Path(__file__).parent / "assets" / "logo_gonggam_mark_only.png"
 LANDING_SIGNATURE = "(주)공감경영컨설팅 박학기 본부장"
 # 서명 바로 아래 작은 회색 글씨로 보여 주는 마지막 고친 날과 고친 내용
-LANDING_UPDATED_NOTE = "마지막으로 고친 날 2026-11-03 · 첫 화면 부제목과 연습용 기록장을 넣음"
+LANDING_UPDATED_NOTE = "마지막으로 고친 날 2026-11-04 · 마감 임박 업무가 먼저 보이게 함"
 # 오른쪽 아래 챗봇 단추에 넣는 로봇 그림. 파일이 없거나 못 읽으면 원래 ✨ 마크를 보여 준다
 CHATBOT_FACE_FILE = Path(__file__).parent / "assets" / "bot_robot.png"
 # 오른쪽 위 「이름 님」 앞에 두는 내 사진. 파일이 없거나 못 읽으면 👤를 보여 준다
@@ -1151,7 +1224,7 @@ def line_icon_url(shapes):
 
 def show_landing(df):
     """서비스를 소개하는 첫 화면. 「시작하기」를 누르면 화면 1로 간다.
-    한 줄 소개 아래에 화면 1과 같은 자료(df)로 센 「아침 브리핑」을 보여 준다.
+    한 줄 소개 아래에 화면 1 「마감 챙길 업무」와 같은 Supabase 업무 기록으로 센 「아침 브리핑」을 보여 준다.
     색은 이 화면을 그릴 때만 넣으므로 기능 화면에는 퍼지지 않는다."""
     st.html(
         """
@@ -1197,12 +1270,23 @@ def show_landing(df):
             margin: 0 auto 12px;
             max-width: 720px;
         }
-        /* 아침 브리핑 한 줄. 마감 지난 일 숫자만 연한 빨간 바탕의 작은 둥근 뱃지로 보인다 */
+        /* 아침 브리핑 한 줄. 마감 임박 숫자는 연한 주황, 마감 지난 일 숫자는 연한 빨간 바탕의 작은 둥근 뱃지로 보인다 */
         .landing .briefing {
             font-size: 18px;
             font-weight: 600;
             color: #1E293B;
             margin: 0 auto 32px;
+        }
+        .landing .briefing .soon {
+            display: inline-block;
+            min-width: 1.6em;
+            padding: 1px 8px;
+            margin: 0 2px;
+            border-radius: 999px;
+            background: #FFEDD5;
+            color: #C2410C;
+            font-weight: 800;
+            line-height: 1.4;
         }
         .landing .briefing .overdue {
             display: inline-block;
@@ -1356,7 +1440,7 @@ def show_landing(df):
         <div class="landing">
             <h1>📋 <span>개인용</span> 관리판</h1>
             <p class="intro">대표의 입장에서 생각하고, 실행까지 함께합니다</p>
-            {morning_briefing(df)}
+            {morning_briefing()}
             <div class="icons">
                 <div class="icon">
                     <div class="circle"><span class="glyph glyph-building"></span></div>
@@ -1863,6 +1947,13 @@ else:
         [data-testid="stMain"] [class*="st-key-card_"] [data-testid="stCaptionContainer"] * {{
             color: #475569;
         }}
+        /* 화면 1 「마감 챙길 업무」 맨 위 마감 임박 묶음: 연한 주황 바탕과 왼쪽 주황 줄로 먼저 눈에 띄게 */
+        [data-testid="stMain"] .st-key-due_soon {{
+            background: rgba(255, 237, 213, 0.75);
+            border-left: 4px solid #F97316;
+            border-radius: 12px;
+            padding: 10px 12px;
+        }}
         /* 화면 2 탭 이름 줄과 카드 밖 작은 안내 글은 배경 사진 위에 바로 놓이므로, 옅은 간유리를 깔아 읽히게 한다 */
         [data-testid="stMain"] [data-baseweb="tab-list"] {{
             background: rgba(255, 255, 255, 0.75);
@@ -1963,8 +2054,10 @@ else:
         """
     )
 
-    # 샘플 자료 안내는 기능 화면에서만 보여 준다
-    st.caption("샘플 자료로 보여 드립니다")
+    # 샘플 자료 안내는 기능 화면에서만 보여 준다.
+    # 화면 1 「마감 챙길 업무」는 Supabase 업무 기록을 보므로 화면 1에서는 띄우지 않는다
+    if st.session_state.screen != "home":
+        st.caption("샘플 자료로 보여 드립니다")
 
     # 기능 화면에서만 사이드바에 첫 화면으로 돌아가는 버튼을 둔다
     st.sidebar.button("← 첫 화면으로", use_container_width=True, on_click=go, args=("landing",))
