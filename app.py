@@ -26,8 +26,11 @@ MEMO_TABLE = "client_memos"
 WORK_TABLE = "work_records"
 # 화면 1에서 추가한 고객사를 담는 표
 CLIENT_TABLE = "clients"
-# 사이드바 「연습용 기록장」에서 쓰고 읽는 표. owner(이름)·note(글 한 줄)·created_at(남긴 시각) 열을 쓴다
+# 사이드바 「연습용 기록장」에서 쓰고 읽는 표. owner(로그인한 사람의 메일)·note(글 한 줄)·created_at(남긴 시각) 열을 쓴다.
+# 메일로 바꾸기 전에 쌓인 줄의 owner에는 손으로 넣은 이름이 그대로 남아 있다
 PRACTICE_TABLE = "practice_notes"
+# 연습용 기록장 글을 표에서 한 번에 받는 줄 수
+PRACTICE_PAGE_ROWS = 1000
 # 화면 2 「인증 만료」 탭에서 쓰고 읽는 고객사별 인증 표
 CERT_TABLE = "client_certifications"
 # 인증 이름 고르는 칸의 목록. 맨 끝 「직접 입력」을 고르면 글 칸이 열린다
@@ -132,6 +135,35 @@ def is_guest():
     """로그인 화면에서 「👀 둘러보기 (보기만)」로 들어왔는지. 구글 계정으로 들어왔으면 둘러보기가 아니다.
     둘러보기에서는 쓰기 칸·버튼을 숨기고, Supabase에 쓰는 함수도 맨 앞에서 그냥 돌아간다."""
     return bool(st.session_state.get("guest")) and not st.user.is_logged_in
+
+
+def admin_emails():
+    """.streamlit/secrets.toml 맨 위 ADMIN_EMAILS의 메일 목록을 소문자로 돌려준다.
+    파일이나 항목을 찾지 못하면 오류로 멈추지 않고 빈 목록(관리자 없음)을 돌려준다."""
+    try:
+        emails = st.secrets.get("ADMIN_EMAILS", [])
+    except Exception:
+        return []
+    # 메일을 목록이 아니라 쉼표로 이은 글 한 줄로 적어 두었어도 같은 목록으로 읽는다
+    if isinstance(emails, str):
+        emails = emails.split(",")
+    if not isinstance(emails, (list, tuple)):
+        return []
+    return [email.strip().lower() for email in emails if isinstance(email, str) and email.strip()]
+
+
+def login_email():
+    """구글 계정으로 들어온 사람의 메일을 소문자로 돌려준다. 들어오지 않았거나 메일이 없으면 빈 글이다."""
+    if not st.user.is_logged_in:
+        return ""
+    email = st.user.get("email")
+    return email.strip().lower() if isinstance(email, str) else ""
+
+
+def is_admin():
+    """구글 계정으로 들어온 사람의 메일이 ADMIN_EMAILS에 있으면 관리자다.
+    둘러보기 손님은 구글 계정으로 들어온 사람이 아니므로 관리자가 아니다."""
+    return login_email() in admin_emails()
 
 
 def seoul_today():
@@ -1668,14 +1700,14 @@ def chat_panel():
 
 
 def save_practice_note():
-    """연습용 기록장의 이름과 글 한 줄을 practice_notes 표에 넣는다. 이름이나 글이 비어 있으면 넣지 않는다.
+    """연습용 기록장의 글 한 줄을 로그인한 메일과 함께 practice_notes 표에 넣는다. 메일이나 글이 비어 있으면 넣지 않는다.
     결과 안내는 다시 그린 기록장에 보여 주도록 남겨 둔다."""
     if is_guest():
         return
-    owner = st.session_state.get("practice_owner", "").strip()
+    owner = login_email()
     note = st.session_state.get("practice_note", "").strip()
     if not owner:
-        st.session_state.practice_message = ("warning", "이름을 먼저 넣어 주세요")
+        st.session_state.practice_message = ("warning", "구글 계정 메일을 찾지 못해 글을 남길 수 없습니다")
         return
     if not note:
         st.session_state.practice_message = ("warning", "남길 글을 한 줄 적어 주세요")
@@ -1689,11 +1721,30 @@ def save_practice_note():
     st.session_state.practice_message = ("success", "글을 남겼습니다")
 
 
+def read_practice_notes():
+    """연습용 기록장 글을 최근 것부터 돌려준다. 관리자는 전체를, 일반 사용자는 owner가 내 메일인 줄만 표에서 받는다.
+    표가 한 번에 주는 줄 수에 제한이 있어, 더 받을 줄이 없을 때까지 이어서 받는다."""
+    admin = is_admin()
+    notes = []
+    while True:
+        query = get_supabase().table(PRACTICE_TABLE).select("owner, note, created_at")
+        if not admin:
+            query = query.eq("owner", login_email())
+        page = (
+            query.order("created_at", desc=True)
+            .range(len(notes), len(notes) + PRACTICE_PAGE_ROWS - 1)
+            .execute()
+            .data
+        )
+        if not page:
+            return notes
+        notes.extend(page)
+
+
 def show_practice_notes():
-    """화면 1·2·3 사이드바의 접었다 펴는 「연습용 기록장」. 이름과 글 한 줄을 남기고,
-    아래 목록에는 owner가 넣은 이름과 같은 글만 최근 것부터 보여 준다. 이름이 비어 있으면 저장도 목록도 막는다."""
+    """화면 1·2·3 사이드바의 접었다 펴는 「연습용 기록장」. 글 한 줄을 로그인한 메일로 남긴다.
+    아래 목록은 최근 것부터 보여 준다. 관리자는 전체 줄과 owner를, 일반 사용자는 내 줄과 구글 계정 이름을 본다."""
     with st.sidebar.expander("📝 연습용 기록장"):
-        st.text_input("이름", key="practice_owner", placeholder="예: 미카엘")
         st.text_input("글 한 줄", key="practice_note", max_chars=300)
         st.button("남기기", key="practice_save", use_container_width=True, on_click=save_practice_note)
 
@@ -1703,35 +1754,25 @@ def show_practice_notes():
             kind, text = message
             {"success": st.success, "warning": st.warning}.get(kind, st.error)(text)
 
-        owner = st.session_state.get("practice_owner", "").strip()
-        if not owner:
-            # 「남기기」를 눌러 이미 이름 안내가 나왔으면 같은 안내를 두 번 띄우지 않는다
-            if not message:
-                st.warning("이름을 넣어야 글을 남기고 목록을 볼 수 있어요")
-            return
         try:
-            notes = (
-                get_supabase()
-                .table(PRACTICE_TABLE)
-                .select("note, created_at")
-                .eq("owner", owner)
-                .order("created_at", desc=True)
-                .execute()
-                .data
-            )
+            notes = read_practice_notes()
         except Exception as e:
             st.error(f"지난 글을 불러오지 못했습니다: {e}")
             return
 
         if not notes:
-            st.caption(f"{owner}님이 남긴 글이 아직 없습니다")
+            st.caption("남긴 글이 아직 없습니다")
+        admin = is_admin()
+        name = st.user.get("name") or "사용자"
         for n in notes:
+            # 일반 사용자 목록에는 메일을 쓰지 않는다. 관리자 목록의 owner는 메일이거나 전에 쌓인 이름이다
+            who = n["owner"] if admin else name
             if n["created_at"]:
                 # 시간대가 없는 시각이 와도 세계 표준시로 보고 한국 시간으로 바꾼다
                 written = pd.to_datetime(n["created_at"], utc=True).tz_convert("Asia/Seoul")
-                st.write(f"{written:%Y-%m-%d %H:%M} · {n['note']}")
+                st.write(f"{written:%Y-%m-%d %H:%M} · {who} · {n['note']}")
             else:
-                st.write(n["note"])
+                st.write(f"{who} · {n['note']}")
 
 
 def show_chatbot():
@@ -1918,6 +1959,26 @@ def show_login_gate():
             st.caption(f"Streamlit 오류 문장: {login_error}")
 
 
+def show_admin():
+    """관리자만 보는 관리 화면. 관리자가 아니면 맨 앞에서 그냥 돌아가 아무것도 그리지 않는다."""
+    if not is_admin():
+        return
+    st.title("관리")
+    with st.container(border=True, key="card_admin"):
+        st.write("관리자만 보는 화면입니다")
+        # 줄을 받아 세면 한 번에 받는 줄 수 제한에 걸릴 수 있어, 표가 직접 센 수만 받는다
+        try:
+            count = get_supabase().table(WORK_TABLE).select("id", count="exact", head=True).execute().count
+        except Exception as e:
+            st.error(f"저장된 업무 기록 수를 불러오지 못했습니다: {e}")
+            return
+        # 표가 수를 돌려주지 않으면 숫자를 지어내지 않고 안내만 남긴다
+        if count is None:
+            st.error("저장된 업무 기록 수를 불러오지 못했습니다")
+            return
+        st.metric("저장된 업무 기록", f"{count:,}")
+
+
 def show_user_bar():
     """모든 화면 맨 위 오른쪽에 들어온 사람의 이름과 「나가기」를 보여 준다.
     둘러보기면 「👀 둘러보는 중」과 「나가기」를 보여 주고, 나가기를 누르면 로그인 화면으로 돌아간다."""
@@ -1978,6 +2039,9 @@ show_user_bar()
 records = load_records()
 # 앱을 열면 서비스 소개 첫 화면이 먼저 뜬다
 st.session_state.setdefault("screen", "landing")
+# 관리자가 아니면 화면 위치가 관리 화면으로 남아 있어도 첫 화면으로 돌려, 관리 화면 코드가 돌지 않게 한다
+if st.session_state.screen == "admin" and not is_admin():
+    st.session_state.screen = "landing"
 
 if st.session_state.screen == "landing":
     show_landing(records)
@@ -2063,7 +2127,7 @@ else:
             color: #1E293B;
         }}
         /* 휴대폰이 다크 모드여도 흰 카드 위 글자가 보이도록, 카드 안 글자는 진한 색으로 정한다 */
-        [data-testid="stMain"] [class*="st-key-card_"] :is(p, li, span, label, h1, h2, h3, h4, h5, h6, div[data-testid="stMarkdownContainer"]) {{
+        [data-testid="stMain"] [class*="st-key-card_"] :is(p, li, span, label, h1, h2, h3, h4, h5, h6, div[data-testid="stMarkdownContainer"], div[data-testid="stMetricValue"]) {{
             color: #1E293B;
         }}
         /* 입력칸(글 칸·날짜 칸·고르기 칸)은 흰 바탕에 진한 글자로 정한다. 챗봇 대화창 안도 같다 */
@@ -2134,12 +2198,15 @@ else:
     )
 
     # 샘플 자료 안내는 기능 화면에서만 보여 준다.
-    # 화면 1 「마감 챙길 업무」는 Supabase 업무 기록을 보므로 화면 1에서는 띄우지 않는다
-    if st.session_state.screen != "home":
+    # 화면 1 「마감 챙길 업무」는 Supabase 업무 기록을 보므로 화면 1에서는 띄우지 않는다. 관리 화면에는 샘플 자료가 없다
+    if st.session_state.screen not in ("home", "admin"):
         st.caption("샘플 자료로 보여 드립니다")
 
     # 기능 화면에서만 사이드바에 첫 화면으로 돌아가는 버튼을 둔다
     st.sidebar.button("← 첫 화면으로", use_container_width=True, on_click=go, args=("landing",))
+    # 관리자에게만 관리 화면으로 가는 버튼을 둔다
+    if is_admin():
+        st.sidebar.button("관리", use_container_width=True, on_click=go, args=("admin",))
     # 사이드바 아래에 연습용 기록장을 접어 둔다. 둘러보기에서는 기록장을 두지 않는다
     if not is_guest():
         show_practice_notes()
@@ -2148,6 +2215,8 @@ else:
         show_detail(records)
     elif st.session_state.screen == "record":
         show_record()
+    elif st.session_state.screen == "admin":
+        show_admin()
     else:
         show_home(records)
 
