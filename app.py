@@ -38,6 +38,13 @@ WORK_COLUMN_NAMES = {
 }
 # 관리 화면 업무 기록 표에서만 숨기는 열. CSV에는 남긴다
 WORK_HIDDEN_COLUMNS = ["id", "created_at"]
+# 관리 화면 업무 기록 표의 은은한 칸 색. 글자는 어둡게 두어 읽히게 한다
+ADMIN_TABLE_TEXT = "color: #1E293B"
+ADMIN_CLIENT_BG = "#EAF4FB"
+ADMIN_STATUS_BG = {"진행중": "#FFF1E0", "완료": "#E8F6EC"}
+ADMIN_DUE_BG = "#FDE8EC"
+# 마감일이 오늘부터 이 날수 이내이거나 지났으면 마감일 칸을 칠한다
+ADMIN_DUE_ALERT_DAYS = 3
 # 화면 1에서 추가한 고객사를 담는 표
 CLIENT_TABLE = "clients"
 # 사이드바 「연습용 기록장」에서 쓰고 읽는 표. owner(로그인한 사람의 메일)·note(글 한 줄)·created_at(남긴 시각) 열을 쓴다.
@@ -1994,6 +2001,29 @@ def show_admin_record_count():
     st.metric("저장된 업무 기록", f"{count:,}")
 
 
+def admin_record_styles(table):
+    """관리 화면 업무 기록 표(한글 열 제목)의 칸마다 입힐 CSS를 같은 모양의 표로 돌려준다. 색을 입히는 칸만 글자색도 정한다."""
+    styles = pd.DataFrame("", index=table.index, columns=table.columns)
+    if "고객사" in table:
+        styles["고객사"] = f"background-color: {ADMIN_CLIENT_BG}; {ADMIN_TABLE_TEXT}"
+    if "상태" in table:
+        styles["상태"] = [
+            f"background-color: {ADMIN_STATUS_BG[s]}; {ADMIN_TABLE_TEXT}" if s in ADMIN_STATUS_BG else ""
+            for s in table["상태"]
+        ]
+    if "마감일" in table:
+        # 마감일이 비어 있거나 날짜가 아니거나, 상태가 「완료」인 업무는 칠하지 않는다
+        days_left = (pd.to_datetime(table["마감일"], errors="coerce") - pd.Timestamp(seoul_today())).dt.days
+        statuses = table["상태"] if "상태" in table else [""] * len(table)
+        styles["마감일"] = [
+            f"background-color: {ADMIN_DUE_BG}; {ADMIN_TABLE_TEXT}"
+            if days <= ADMIN_DUE_ALERT_DAYS and status != "완료"
+            else ""
+            for days, status in zip(days_left, statuses)
+        ]
+    return styles
+
+
 def show_admin_records():
     """관리 화면의 업무 기록 전체 표와 CSV 내려받기. 관리자가 아니면 맨 앞에서 그냥 돌아가 표를 읽지 않는다.
     화면의 표와 CSV는 표에서 읽은 같은 값이고, 읽지 못하면 둘 다 보여 주지 않는다."""
@@ -2022,10 +2052,13 @@ def show_admin_records():
 
     # 빈 칸이 있는 숫자 열이 소수로 바뀌지 않도록 표에서 읽은 값을 그대로 둔다
     records = pd.DataFrame(rows, dtype=object)
-    # 화면 표에서는 id·created_at을 숨기고, 비어 있는 값(None)은 빈칸으로 보여 준다
+    # 화면 표에서는 id·created_at을 숨기고, 비어 있는 값(None)은 빈칸으로 보여 준다.
+    # important 열은 빈칸 글자를 섞으면 체크 상자가 글자로 바뀌므로 그대로 둔다
     shown = records.drop(columns=WORK_HIDDEN_COLUMNS, errors="ignore")
-    shown = shown.where(shown.notna(), "").rename(columns=WORK_COLUMN_NAMES)
-    st.dataframe(shown, use_container_width=True, hide_index=True)
+    text_columns = shown.columns.drop("important", errors="ignore")
+    shown[text_columns] = shown[text_columns].where(shown[text_columns].notna(), "")
+    shown = shown.rename(columns=WORK_COLUMN_NAMES)
+    st.dataframe(shown.style.apply(admin_record_styles, axis=None), use_container_width=True, hide_index=True)
     # CSV는 모든 열을 한글 열 제목으로 남기고, 엑셀이 한글을 알아보도록 utf-8-sig로 저장한다
     st.download_button(
         "CSV 내려받기",
