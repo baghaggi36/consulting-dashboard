@@ -24,6 +24,20 @@ PRD_FILE = Path(__file__).parent / "PRD.md"
 MEMO_TABLE = "client_memos"
 # 화면 3에서 쓰고 읽는 업무 기록 표
 WORK_TABLE = "work_records"
+# 관리 화면 업무 기록 표와 CSV의 한글 열 제목. 여기에 없는 열은 표에서 읽은 이름 그대로 둔다
+WORK_COLUMN_NAMES = {
+    "client_name": "고객사",
+    "work_date": "업무일",
+    "task": "업무",
+    "status": "상태",
+    "next_step": "다음 할 일",
+    "due_date": "마감일",
+    "file_location": "파일 위치",
+    "revision_note": "수정 메모",
+    "important": "중요",
+}
+# 관리 화면 업무 기록 표에서만 숨기는 열. CSV에는 남긴다
+WORK_HIDDEN_COLUMNS = ["id", "created_at"]
 # 화면 1에서 추가한 고객사를 담는 표
 CLIENT_TABLE = "clients"
 # 사이드바 「연습용 기록장」에서 쓰고 읽는 표. owner(로그인한 사람의 메일)·note(글 한 줄)·created_at(남긴 시각) 열을 쓴다.
@@ -2008,11 +2022,14 @@ def show_admin_records():
 
     # 빈 칸이 있는 숫자 열이 소수로 바뀌지 않도록 표에서 읽은 값을 그대로 둔다
     records = pd.DataFrame(rows, dtype=object)
-    st.dataframe(records, use_container_width=True, hide_index=True)
-    # 엑셀이 한글을 알아보도록 utf-8-sig로 저장한다
+    # 화면 표에서는 id·created_at을 숨기고, 비어 있는 값(None)은 빈칸으로 보여 준다
+    shown = records.drop(columns=WORK_HIDDEN_COLUMNS, errors="ignore")
+    shown = shown.where(shown.notna(), "").rename(columns=WORK_COLUMN_NAMES)
+    st.dataframe(shown, use_container_width=True, hide_index=True)
+    # CSV는 모든 열을 한글 열 제목으로 남기고, 엑셀이 한글을 알아보도록 utf-8-sig로 저장한다
     st.download_button(
         "CSV 내려받기",
-        records.to_csv(index=False).encode("utf-8-sig"),
+        records.rename(columns=WORK_COLUMN_NAMES).to_csv(index=False).encode("utf-8-sig"),
         file_name=f"업무기록_전체_{seoul_today()}.csv",
         mime="text/csv",
         key="admin_records_csv",
