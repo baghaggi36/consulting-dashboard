@@ -29,8 +29,8 @@ CLIENT_TABLE = "clients"
 # 사이드바 「연습용 기록장」에서 쓰고 읽는 표. owner(로그인한 사람의 메일)·note(글 한 줄)·created_at(남긴 시각) 열을 쓴다.
 # 메일로 바꾸기 전에 쌓인 줄의 owner에는 손으로 넣은 이름이 그대로 남아 있다
 PRACTICE_TABLE = "practice_notes"
-# 연습용 기록장 글을 표에서 한 번에 받는 줄 수
-PRACTICE_PAGE_ROWS = 1000
+# 표 전체를 읽을 때 한 번에 받는 줄 수
+TABLE_PAGE_ROWS = 1000
 # 화면 2 「인증 만료」 탭에서 쓰고 읽는 고객사별 인증 표
 CERT_TABLE = "client_certifications"
 # 인증 이름 고르는 칸의 목록. 맨 끝 「직접 입력」을 고르면 글 칸이 열린다
@@ -1721,24 +1721,28 @@ def save_practice_note():
     st.session_state.practice_message = ("success", "글을 남겼습니다")
 
 
-def read_practice_notes():
-    """연습용 기록장 글을 최근 것부터 돌려준다. 관리자는 전체를, 일반 사용자는 owner가 내 메일인 줄만 표에서 받는다.
+def read_all_rows(make_query):
+    """make_query가 만든 조회의 줄을 모두 돌려준다.
     표가 한 번에 주는 줄 수에 제한이 있어, 더 받을 줄이 없을 때까지 이어서 받는다."""
-    admin = is_admin()
-    notes = []
+    rows = []
     while True:
+        page = make_query().range(len(rows), len(rows) + TABLE_PAGE_ROWS - 1).execute().data
+        if not page:
+            return rows
+        rows.extend(page)
+
+
+def read_practice_notes():
+    """연습용 기록장 글을 최근 것부터 돌려준다. 관리자는 전체를, 일반 사용자는 owner가 내 메일인 줄만 표에서 받는다."""
+    admin = is_admin()
+
+    def make_query():
         query = get_supabase().table(PRACTICE_TABLE).select("owner, note, created_at")
         if not admin:
             query = query.eq("owner", login_email())
-        page = (
-            query.order("created_at", desc=True)
-            .range(len(notes), len(notes) + PRACTICE_PAGE_ROWS - 1)
-            .execute()
-            .data
-        )
-        if not page:
-            return notes
-        notes.extend(page)
+        return query.order("created_at", desc=True)
+
+    return read_all_rows(make_query)
 
 
 def show_practice_notes():
@@ -1959,6 +1963,62 @@ def show_login_gate():
             st.caption(f"Streamlit 오류 문장: {login_error}")
 
 
+def show_admin_record_count():
+    """관리 화면의 업무 기록 수. 관리자가 아니면 맨 앞에서 그냥 돌아가 표를 읽지 않는다."""
+    if not is_admin():
+        return
+    # 줄을 받아 세면 한 번에 받는 줄 수 제한에 걸릴 수 있어, 표가 직접 센 수만 받는다
+    try:
+        count = get_supabase().table(WORK_TABLE).select("id", count="exact", head=True).execute().count
+    except Exception as e:
+        st.error(f"저장된 업무 기록 수를 불러오지 못했습니다: {e}")
+        return
+    # 표가 수를 돌려주지 않으면 숫자를 지어내지 않고 안내만 남긴다
+    if count is None:
+        st.error("저장된 업무 기록 수를 불러오지 못했습니다")
+        return
+    st.metric("저장된 업무 기록", f"{count:,}")
+
+
+def show_admin_records():
+    """관리 화면의 업무 기록 전체 표와 CSV 내려받기. 관리자가 아니면 맨 앞에서 그냥 돌아가 표를 읽지 않는다.
+    화면의 표와 CSV는 표에서 읽은 같은 값이고, 읽지 못하면 둘 다 보여 주지 않는다."""
+    if not is_admin():
+        return
+
+    # 이어 받는 동안 줄이 겹치거나 빠지지 않게 id까지 넣어 순서를 하나로 정한다
+    def make_query():
+        return (
+            get_supabase()
+            .table(WORK_TABLE)
+            .select("*")
+            .order("work_date", desc=True)
+            .order("created_at", desc=True)
+            .order("id", desc=True)
+        )
+
+    try:
+        rows = read_all_rows(make_query)
+    except Exception as e:
+        st.error(f"업무 기록 전체를 불러오지 못했습니다: {e}")
+        return
+    if not rows:
+        st.caption("저장된 업무 기록이 없습니다")
+        return
+
+    # 빈 칸이 있는 숫자 열이 소수로 바뀌지 않도록 표에서 읽은 값을 그대로 둔다
+    records = pd.DataFrame(rows, dtype=object)
+    st.dataframe(records, use_container_width=True, hide_index=True)
+    # 엑셀이 한글을 알아보도록 utf-8-sig로 저장한다
+    st.download_button(
+        "CSV 내려받기",
+        records.to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"업무기록_전체_{seoul_today()}.csv",
+        mime="text/csv",
+        key="admin_records_csv",
+    )
+
+
 def show_admin():
     """관리자만 보는 관리 화면. 관리자가 아니면 맨 앞에서 그냥 돌아가 아무것도 그리지 않는다."""
     if not is_admin():
@@ -1966,17 +2026,8 @@ def show_admin():
     st.title("관리")
     with st.container(border=True, key="card_admin"):
         st.write("관리자만 보는 화면입니다")
-        # 줄을 받아 세면 한 번에 받는 줄 수 제한에 걸릴 수 있어, 표가 직접 센 수만 받는다
-        try:
-            count = get_supabase().table(WORK_TABLE).select("id", count="exact", head=True).execute().count
-        except Exception as e:
-            st.error(f"저장된 업무 기록 수를 불러오지 못했습니다: {e}")
-            return
-        # 표가 수를 돌려주지 않으면 숫자를 지어내지 않고 안내만 남긴다
-        if count is None:
-            st.error("저장된 업무 기록 수를 불러오지 못했습니다")
-            return
-        st.metric("저장된 업무 기록", f"{count:,}")
+        show_admin_record_count()
+        show_admin_records()
 
 
 def show_user_bar():
