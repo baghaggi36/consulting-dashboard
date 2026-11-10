@@ -1652,13 +1652,16 @@ def chat_panel():
     st.caption("PRD.md를 읽고 서비스에 대해 답해 드려요")
 
     messages = st.session_state.setdefault("chat_messages", [])
+    # 챗봇 말풍선 아이콘은 오른쪽 아래 챗봇 단추와 같은 로봇 그림. 파일이 없거나 못 읽으면 원래 ✨를 쓴다
+    bot_face = small_photo_url(str(CHATBOT_FACE_FILE), 96) if CHATBOT_FACE_FILE.is_file() else None
+    bot_avatar = bot_face or "✨"
 
     with st.container(height=320):
         if not messages:
-            with st.chat_message("assistant", avatar="✨"):
+            with st.chat_message("assistant", avatar=bot_avatar):
                 st.write("안녕하세요! 이 관리판에 대해 궁금한 점을 물어보세요.")
         for m in messages:
-            role, avatar = ("user", None) if m["role"] == "user" else ("assistant", "✨")
+            role, avatar = ("user", None) if m["role"] == "user" else ("assistant", bot_avatar)
             with st.chat_message(role, avatar=avatar):
                 if m["role"] == "model":
                     st.caption("AI가 쓴 초안입니다 · 확인하고 쓰세요")
@@ -1897,6 +1900,11 @@ def show_chatbot():
             }}
             .st-key-chatbot button p {{
                 opacity: 0;
+            }}
+            /* 대화창 안 챗봇 말풍선 아이콘: 그림 전체를 잘라 내지 않고 칸에 맞춰 넣고, 동그랗게 보이게 한다 */
+            [data-testid="stPopoverBody"] img[alt="assistant avatar"] {{
+                object-fit: contain;
+                border-radius: 50%;
             }}
             </style>
             """
