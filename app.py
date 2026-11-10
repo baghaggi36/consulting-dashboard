@@ -45,6 +45,8 @@ ADMIN_STATUS_BG = {"진행중": "#FFF1E0", "완료": "#E8F6EC"}
 ADMIN_DUE_BG = "#FDE8EC"
 # 마감일이 오늘부터 이 날수 이내이거나 지났으면 마감일 칸을 칠한다
 ADMIN_DUE_ALERT_DAYS = 3
+# 관리 화면 「← 돌아가기」가 돌아갈 수 있는 화면(화면 1·2·3). 그 밖이면 화면 1로 간다
+ADMIN_RETURN_SCREENS = ("home", "detail", "record")
 # 화면 1에서 추가한 고객사를 담는 표
 CLIENT_TABLE = "clients"
 # 사이드바 「연습용 기록장」에서 쓰고 읽는 표. owner(로그인한 사람의 메일)·note(글 한 줄)·created_at(남긴 시각) 열을 쓴다.
@@ -2069,11 +2071,25 @@ def show_admin_records():
     )
 
 
+def open_admin():
+    """사이드바 「관리」를 누르면 지금 보던 화면을 기억해 두고 관리 화면으로 간다. 관리 화면에서 다시 눌러도 기억은 바꾸지 않는다."""
+    if st.session_state.get("screen") != "admin":
+        st.session_state.before_admin = st.session_state.get("screen")
+    go("admin")
+
+
+def leave_admin():
+    """관리 화면 「← 돌아가기」: 「관리」를 누르기 직전에 보던 화면 1·2·3으로 돌아간다. 알 수 없으면 화면 1로 간다."""
+    before = st.session_state.pop("before_admin", None)
+    go(before if before in ADMIN_RETURN_SCREENS else "home")
+
+
 def show_admin():
     """관리자만 보는 관리 화면. 관리자가 아니면 맨 앞에서 그냥 돌아가 아무것도 그리지 않는다."""
     if not is_admin():
         return
     st.title("관리")
+    st.button("← 돌아가기", key="admin_back", on_click=leave_admin)
     with st.container(border=True, key="card_admin"):
         st.write("관리자만 보는 화면입니다")
         show_admin_record_count()
@@ -2307,7 +2323,7 @@ else:
     st.sidebar.button("← 첫 화면으로", use_container_width=True, on_click=go, args=("landing",))
     # 관리자에게만 관리 화면으로 가는 버튼을 둔다
     if is_admin():
-        st.sidebar.button("관리", use_container_width=True, on_click=go, args=("admin",))
+        st.sidebar.button("관리", use_container_width=True, on_click=open_admin)
     # 사이드바 아래에 연습용 기록장을 접어 둔다. 둘러보기에서는 기록장을 두지 않는다
     if not is_guest():
         show_practice_notes()
