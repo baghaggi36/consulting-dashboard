@@ -336,6 +336,11 @@ def morning_briefing():
     return f'<p class="briefing">{day_text} · {soon_text} · {overdue_text}</p>'
 
 
+def toggle_sidebar():
+    """화면 1·2·3 왼쪽 위 「☰ 메뉴」 단추: 사이드바를 보이거나 감춘다."""
+    st.session_state.sidebar_open = not st.session_state.get("sidebar_open", False)
+
+
 def go(screen, client=None):
     st.session_state.screen = screen
     if client is not None:
@@ -2501,6 +2506,49 @@ else:
     # 실제 관리판(로그인)에서는 샘플 안내를 띄우지 않고, 둘러보기에서만 보여 준다
     if use_demo_data() and st.session_state.screen not in ("home", "admin"):
         st.caption("샘플 자료로 보여 드립니다")
+
+    # 사이드바는 처음에 감춰 두고, 왼쪽 위 「☰ 메뉴」 단추로 열고 닫는다.
+    # Streamlit 자체의 « 접기 단추는 감춰 이 단추 하나로만 여닫게 한다
+    sidebar_open = st.session_state.get("sidebar_open", False)
+    # 여닫는 단추는 글자 없이 그림(☰·✕)만 보이는 작은 네모 단추로 꾸민다
+    st.html(
+        """
+        <style>
+        .st-key-menu_open {
+            position: fixed;
+            top: 14px;
+            left: 16px;
+            z-index: 1000001;
+            width: auto !important;
+        }
+        .st-key-menu_open button, .st-key-menu_close button {
+            width: 44px;
+            min-height: 40px;
+            padding: 0;
+            font-size: 22px;
+            line-height: 1;
+        }
+        .st-key-menu_open button p, .st-key-menu_close button p {
+            font-size: 22px;
+            line-height: 1;
+            margin: 0;
+        }
+        [data-testid="stSidebarCollapseButton"] { display: none !important; }
+        </style>
+        """
+    )
+    if sidebar_open:
+        # 열려 있으면 사이드바 맨 위(「← 첫 화면으로」 위)에 ❤️ 단추만 둔다(누르면 닫힘)
+        st.sidebar.button("❤️", key="menu_close", help="메뉴 닫기", on_click=toggle_sidebar)
+    else:
+        # 닫혀 있으면 화면 왼쪽 위 구석에 ☰ 단추만 두고 사이드바는 감춘다
+        st.button("☰", key="menu_open", help="메뉴 열기", on_click=toggle_sidebar)
+        st.html(
+            "<style>"
+            '[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"],'
+            ' [data-testid="stExpandSidebarButton"] { display: none !important; }'
+            "</style>"
+        )
 
     # 기능 화면에서만 사이드바에 첫 화면으로 돌아가는 버튼을 둔다
     st.sidebar.button("← 첫 화면으로", use_container_width=True, on_click=go, args=("landing",))
