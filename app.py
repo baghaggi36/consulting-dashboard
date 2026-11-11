@@ -1987,25 +1987,25 @@ def show_chatbot():
             width: auto !important;
             z-index: 1000;
         }
-        /* 챗봇 단추는 처음 크기(64px)의 1.5배. 안의 ✨ 그림도 1.5배로 키워 꽉 차 보이게 한다 */
+        /* 챗봇 단추: 이전 크기(96px)의 70%. 안의 ✨ 그림도 같은 비율로 줄인다 */
         .st-key-chatbot button {
-            width: 96px;
-            height: 96px;
+            width: 67px;
+            height: 67px;
             padding: 0;
             border-radius: 50%;
-            font-size: 48px;
+            font-size: 34px;
             background: #ffd43b;
             border: none;
             box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
         }
         .st-key-chatbot button p {
-            font-size: 48px;
+            font-size: 34px;
             line-height: 1;
             margin: 0;
         }
         /* 큰 단추가 화면 맨 아래 글과 버튼을 가리지 않도록, 끝까지 내리면 단추 높이만큼 빈자리가 남게 한다 */
         [data-testid="stMainBlockContainer"] {
-            padding-bottom: 196px;
+            padding-bottom: 168px;
         }
         /* 휴대폰처럼 좁은 화면에서는 처음 크기의 1.2배로 줄이고, 가장자리 여백도 줄인다 */
         @media (max-width: 640px) {
@@ -2014,15 +2014,15 @@ def show_chatbot():
                 bottom: 72px;
             }
             .st-key-chatbot button {
-                width: 77px;
-                height: 77px;
-                font-size: 38px;
+                width: 54px;
+                height: 54px;
+                font-size: 27px;
             }
             .st-key-chatbot button p {
-                font-size: 38px;
+                font-size: 27px;
             }
             [data-testid="stMainBlockContainer"] {
-                padding-bottom: 164px;
+                padding-bottom: 140px;
             }
         }
         .st-key-chatbot button:hover {
