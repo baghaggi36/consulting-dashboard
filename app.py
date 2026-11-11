@@ -815,6 +815,107 @@ def show_detail(df):
     with memo_col:
         show_memos(client)
 
+    show_client_settings(client)
+
+
+# 고객사 이름을 바꾸거나 지울 때 함께 고치는 표(모두 client_name 열로 고객사를 가리킨다)
+CLIENT_LINKED_TABLES = (WORK_TABLE, MEMO_TABLE, CERT_TABLE)
+
+
+def client_exists(name):
+    """clients 표에 같은 이름의 고객사가 있는지."""
+    rows = get_supabase().table(CLIENT_TABLE).select("id").eq("client_name", name).execute().data
+    return bool(rows)
+
+
+def linked_counts(client):
+    """이 고객사에 딸린 업무 기록·메모·인증 수."""
+    counts = {}
+    for table in CLIENT_LINKED_TABLES:
+        counts[table] = (
+            get_supabase().table(table).select("id", count="exact", head=True)
+            .eq("client_name", client).execute().count or 0
+        )
+    return counts
+
+
+def rename_client(client):
+    """고객사 이름을 바꾼다. 업무 기록·메모·인증에 적힌 이름도 함께 바꾼다.
+    새 이름이 비었거나, 같거나, 이미 있는 고객사면 바꾸지 않는다."""
+    if is_guest():
+        return
+    new = st.session_state.get("rename_client_to", "").strip()
+    if not new or new == client:
+        st.session_state.client_setting_message = ("warning", "바꿀 새 이름을 입력해 주세요")
+        return
+    try:
+        if client_exists(new):
+            st.session_state.client_setting_message = ("warning", f"이미 있는 고객사 이름입니다: {new}")
+            return
+        for table in CLIENT_LINKED_TABLES:
+            get_supabase().table(table).update({"client_name": new}).eq("client_name", client).execute()
+        if client_exists(client):
+            get_supabase().table(CLIENT_TABLE).update({"client_name": new}).eq("client_name", client).execute()
+        else:
+            get_supabase().table(CLIENT_TABLE).insert({"client_name": new}).execute()
+    except Exception as e:
+        st.session_state.client_setting_message = ("error", f"이름을 바꾸지 못했습니다: {e}")
+        return
+    st.session_state.client = new
+    st.session_state.home_client = new
+    st.session_state.rename_client_to = ""
+    st.session_state.client_setting_message = ("success", f"「{client}」을(를) 「{new}」(으)로 바꿨습니다")
+
+
+def delete_client(client):
+    """고객사와 그 고객사의 업무 기록·메모·인증을 모두 지우고 화면 1로 돌아간다.
+    「함께 지워짐을 확인했습니다」에 체크해야만 지운다."""
+    if is_guest():
+        return
+    if not st.session_state.get("delete_client_confirm"):
+        st.session_state.client_setting_message = ("warning", "지우려면 먼저 확인 칸에 체크해 주세요")
+        return
+    try:
+        for table in CLIENT_LINKED_TABLES:
+            get_supabase().table(table).delete().eq("client_name", client).execute()
+        get_supabase().table(CLIENT_TABLE).delete().eq("client_name", client).execute()
+    except Exception as e:
+        st.session_state.client_setting_message = ("error", f"고객사를 지우지 못했습니다: {e}")
+        return
+    st.session_state.delete_client_confirm = False
+    st.session_state.pop("home_client", None)
+    st.session_state.client_add_message = ("success", f"고객사 「{client}」와 딸린 기록을 지웠습니다")
+    go("home")
+
+
+def show_client_settings(client):
+    """화면 2 맨 아래: 고객사 이름 고치기·지우기. 둘러보기에서는 보이지 않는다."""
+    if is_guest():
+        return
+    message = st.session_state.pop("client_setting_message", None)
+    with st.expander("⚙️ 고객사 이름 고치기·지우기", expanded=message is not None):
+        if message:
+            kind, text = message
+            {"success": st.success, "warning": st.warning}.get(kind, st.error)(text)
+        rename_col, delete_col = st.columns(2)
+        with rename_col:
+            st.markdown("**이름 고치기**")
+            st.text_input("새 고객사 이름", key="rename_client_to", placeholder=client)
+            st.caption("업무 기록·메모·인증에 적힌 이름도 함께 바뀝니다")
+            st.button("이름 바꾸기", key="rename_client_btn", on_click=rename_client, args=(client,))
+        with delete_col:
+            st.markdown("**고객사 지우기**")
+            try:
+                counts = linked_counts(client)
+                st.write(
+                    f"업무 기록 {counts[WORK_TABLE]}건 · 메모 {counts[MEMO_TABLE]}건 · "
+                    f"인증 {counts[CERT_TABLE]}건이 함께 지워집니다. 되돌릴 수 없습니다."
+                )
+            except Exception as e:
+                st.error(f"딸린 기록 수를 세지 못했습니다: {e}")
+            st.checkbox("함께 지워짐을 확인했습니다", key="delete_client_confirm")
+            st.button("고객사 지우기", key="delete_client_btn", on_click=delete_client, args=(client,))
+
 
 def pick_cert(client, cert):
     """인증 목록에서 고른 인증을 어느 고객사 것인지와 함께 기억해 두고, 입력 칸에 그 값을 채운다."""
