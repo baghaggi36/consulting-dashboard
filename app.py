@@ -2510,6 +2510,13 @@ else:
     # 사이드바 아래에 연습용 기록장을 접어 둔다. 둘러보기에서는 기록장을 두지 않는다
     if not is_guest():
         show_practice_notes()
+    # 화면 1 사이드바 맨 아래(연습용 기록장 아래)에 共感 & TSG 한자 로고를 크게 둔다
+    if st.session_state.screen == "home":
+        st.sidebar.html(
+            f'<div style="text-align:center; margin-top:64px;">'
+            f'<img src="{image_data_url(str(TITLE_LOGO_FILE))}" alt="共感 로고" '
+            f'style="width:68%; max-width:192px; height:auto;"></div>'
+        )
 
     if st.session_state.screen == "detail":
         show_detail(records)
