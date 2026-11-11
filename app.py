@@ -2387,7 +2387,8 @@ else:
 
     # 샘플 자료 안내는 기능 화면에서만 보여 준다.
     # 화면 1 「마감 챙길 업무」는 Supabase 업무 기록을 보므로 화면 1에서는 띄우지 않는다. 관리 화면에는 샘플 자료가 없다
-    if st.session_state.screen not in ("home", "admin"):
+    # 실제 관리판(로그인)에서는 샘플 안내를 띄우지 않고, 둘러보기에서만 보여 준다
+    if use_demo_data() and st.session_state.screen not in ("home", "admin"):
         st.caption("샘플 자료로 보여 드립니다")
 
     # 기능 화면에서만 사이드바에 첫 화면으로 돌아가는 버튼을 둔다
