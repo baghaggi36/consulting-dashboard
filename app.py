@@ -141,12 +141,42 @@ load_dotenv(Path(__file__).parent / ".env")
 
 
 @st.cache_resource
+def supabase_client(url, key):
+    return create_client(url, key)
+
+
+def use_demo_data():
+    """둘러보기(로그인 안 함)는 가상 자료 창고, 허락된 구글 계정은 실제 자료 창고를 쓴다."""
+    return is_guest()
+
+
 def get_supabase():
-    return create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+    """둘러보기면 가상 자료 창고(SUPABASE_URL·SUPABASE_KEY, 프로젝트 my-service),
+    로그인한 미카엘이면 실제 자료 창고(SUPABASE_REAL_URL·SUPABASE_REAL_KEY, 프로젝트 my-service-real)에 연결한다.
+    두 창고는 완전히 따로라서 실제 자료가 둘러보기 화면에 섞여 나올 수 없다."""
+    if use_demo_data():
+        return supabase_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+    return supabase_client(os.environ["SUPABASE_REAL_URL"], os.environ["SUPABASE_REAL_KEY"])
+
+
+# 가상 예시 CSV(data/records.csv)의 열. 실제 관리판에서는 이 열만 있는 빈 표를 쓴다
+RECORD_COLUMNS = [
+    "record_id", "client_name", "work_date", "task", "status",
+    "next_step", "due_date", "file_location", "revision_note", "important",
+]
+
+
+def load_records():
+    """가상 예시 CSV는 둘러보기에서만 읽는다. 실제 관리판에서는 빈 표를 돌려 Supabase 기록만 보이게 한다."""
+    return _load_records(use_demo_data())
 
 
 @st.cache_data
-def load_records():
+def _load_records(demo):
+    if not demo:
+        df = pd.DataFrame(columns=RECORD_COLUMNS, dtype=object)
+        df["important"] = df["important"].astype(bool)
+        return df
     df = pd.read_csv(DATA_FILE, dtype=str)
     df["work_date"] = pd.to_datetime(df["work_date"]).dt.date
     df["due_date"] = pd.to_datetime(df["due_date"]).dt.date
@@ -181,6 +211,35 @@ def login_email():
         return ""
     email = st.user.get("email")
     return email.strip().lower() if isinstance(email, str) else ""
+
+
+def allowed_emails():
+    """관리판(실제 자료)에 들어올 수 있는 메일 목록. ADMIN_EMAILS와 ALLOWED_EMAILS(있으면)를 합친다.
+    둘 다 찾지 못하면 빈 목록이라 아무도 들어오지 못한다."""
+    emails = set(admin_emails())
+    try:
+        extra = st.secrets.get("ALLOWED_EMAILS", [])
+    except Exception:
+        extra = []
+    if isinstance(extra, str):
+        extra = extra.split(",")
+    if isinstance(extra, (list, tuple)):
+        emails.update(e.strip().lower() for e in extra if isinstance(e, str) and e.strip())
+    return emails
+
+
+def is_allowed():
+    """구글 계정으로 들어온 사람의 메일이 허락된 목록에 있는지."""
+    email = login_email()
+    return bool(email) and email in allowed_emails()
+
+
+def show_no_access():
+    """허락되지 않은 구글 계정으로 들어오면 안내와 「나가기」만 보여 주고 아무 자료도 읽지 않는다."""
+    with st.container(border=True):
+        st.subheader("사용 권한이 없습니다")
+        st.write("이 관리판은 허락된 계정만 사용할 수 있습니다. 「나가기」를 누른 뒤 둘러보기(보기만)를 이용해 주세요.")
+        st.button("나가기", type="primary", on_click=st.logout)
 
 
 def is_admin():
@@ -2140,7 +2199,7 @@ def show_user_bar():
     )
     if is_guest():
         with st.container(key="user_bar"):
-            st.html('<p class="user-name">👀 둘러보는 중</p>')
+            st.html('<p class="user-name">👀 둘러보는 중 · 가상 예시 자료</p>')
             st.button("나가기", key="logout", on_click=end_guest)
         return
     name = st.user.get("name") or st.user.get("email") or "사용자"
@@ -2158,6 +2217,10 @@ st.set_page_config(page_title="개인용 관리판", page_icon="📋", layout="w
 # 둘 다 아니면 안내 화면만 그리고 멈춘다
 if not st.user.is_logged_in and not is_guest():
     show_login_gate()
+    st.stop()
+# 구글 계정으로 들어왔어도 허락된 메일(ADMIN_EMAILS·ALLOWED_EMAILS)이 아니면 실제 자료를 열지 않고 멈춘다
+if st.user.is_logged_in and not is_allowed():
+    show_no_access()
     st.stop()
 show_user_bar()
 
