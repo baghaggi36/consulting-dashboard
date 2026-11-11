@@ -1425,9 +1425,11 @@ LANDING_ICONS = {
 LANDING_BG_FILE = Path(__file__).parent / "assets" / "autumn_sky.jpg"
 # 첫 화면 카드 맨 아래 「시작하기」 밑에 두는 로고와 서명 한 줄
 LANDING_LOGO_FILE = Path(__file__).parent / "assets" / "logo_gonggam_mark_only.png"
+# 제목 앞과 브라우저 탭에 쓰는 共感 & TSG 한자 로고(원본: 미카엘이 준 PSD를 PNG로 바꾼 것)
+TITLE_LOGO_FILE = Path(__file__).parent / "assets" / "logo_gonggam_hanja.png"
 LANDING_SIGNATURE = "(주)공감경영컨설팅 박학기 본부장"
 # 서명 바로 아래 작은 회색 글씨로 보여 주는 마지막 고친 날과 고친 내용
-LANDING_UPDATED_NOTE = "마지막으로 고친 날 2026-11-04 · 마감 임박 업무가 먼저 보이게 함"
+LANDING_UPDATED_NOTE = "마지막으로 고친 날 2026-11-11 · 이름을 미카엘 DESK로 바꾸고 실제 관리판으로 전환"
 # 오른쪽 아래 챗봇 단추에 넣는 로봇 그림. 파일이 없거나 못 읽으면 원래 ✨ 마크를 보여 준다
 CHATBOT_FACE_FILE = Path(__file__).parent / "assets" / "bot_robot.png"
 # 오른쪽 위 「이름 님」 앞에 두는 내 사진. 파일이 없거나 못 읽으면 👤를 보여 준다
@@ -1518,6 +1520,13 @@ def show_landing(df):
         }
         .landing h1 span {
             color: #0284C7;
+        }
+        /* 제목 앞 공감 로고: 글자 높이에 맞추고 글자와 가운데를 맞춘다 */
+        .landing h1 .title-logo {
+            height: 1.5em;
+            width: auto;
+            vertical-align: middle;
+            margin-right: 14px;
         }
         .landing .intro {
             font-size: 20px;
@@ -1693,21 +1702,21 @@ def show_landing(df):
         st.html(
             f"""
         <div class="landing">
-            <h1>📋 <span>개인용</span> 관리판</h1>
+            <h1><img class="title-logo" src="{image_data_url(str(TITLE_LOGO_FILE))}" alt="共感 로고"><span>미카엘</span> DESK</h1>
             <p class="intro">대표의 입장에서 생각하고, 실행까지 함께합니다</p>
             {morning_briefing()}
             <div class="icons">
                 <div class="icon">
                     <div class="circle"><span class="glyph glyph-building"></span></div>
-                    <p>고객사 현황</p>
+                    <p>Clients</p>
                 </div>
                 <div class="icon">
                     <div class="circle"><span class="glyph glyph-pencil"></span></div>
-                    <p>업무 기록</p>
+                    <p>Work Log</p>
                 </div>
                 <div class="icon">
                     <div class="circle"><span class="glyph glyph-clock"></span></div>
-                    <p>마감 관리</p>
+                    <p>Deadlines</p>
                 </div>
             </div>
         </div>
@@ -1715,7 +1724,7 @@ def show_landing(df):
         )
 
         with st.container(key="start"):
-            st.button("시작하기", use_container_width=True, on_click=go, args=("home",))
+            st.button("Start", use_container_width=True, on_click=go, args=("home",))
 
         st.html(
             f"""
@@ -2144,7 +2153,7 @@ def show_login_gate():
         """
     )
     with st.container(key="login_panel"):
-        st.html("<h2>개인용 관리판</h2><p>구글 계정으로 들어오면 관리판이 열립니다</p>")
+        st.html("<h2>미카엘 DESK</h2><p>구글 계정으로 들어오면 관리판이 열립니다</p>")
         st.button("구글 계정으로 들어가기", type="primary", use_container_width=True, on_click=start_google_login)
         st.button("👀 둘러보기 (보기만)", use_container_width=True, on_click=start_guest)
         login_error = st.session_state.pop("login_error", None)
@@ -2312,7 +2321,7 @@ def show_user_bar():
 
 
 # 열을 나란히 두려면 화면 너비를 넓게 쓴다. 브라우저 탭에는 이름과 📋 그림을 보여 준다
-st.set_page_config(page_title="개인용 관리판", page_icon="📋", layout="wide")
+st.set_page_config(page_title="미카엘 DESK", page_icon=str(TITLE_LOGO_FILE), layout="wide")
 
 # 구글 계정으로 들어온 사람과 「둘러보기 (보기만)」로 들어온 사람만 화면을 본다.
 # 둘 다 아니면 안내 화면만 그리고 멈춘다
