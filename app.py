@@ -1982,7 +1982,8 @@ def show_chatbot():
         .st-key-chatbot {
             position: fixed;
             right: 32px;
-            bottom: 32px;
+            /* 오른쪽 아래 검정 「Manage app」 단추(약 44px 높이) 위로 올라오게 띄운다 */
+            bottom: 84px;
             width: auto !important;
             z-index: 1000;
         }
@@ -2004,13 +2005,13 @@ def show_chatbot():
         }
         /* 큰 단추가 화면 맨 아래 글과 버튼을 가리지 않도록, 끝까지 내리면 단추 높이만큼 빈자리가 남게 한다 */
         [data-testid="stMainBlockContainer"] {
-            padding-bottom: 144px;
+            padding-bottom: 196px;
         }
         /* 휴대폰처럼 좁은 화면에서는 처음 크기의 1.2배로 줄이고, 가장자리 여백도 줄인다 */
         @media (max-width: 640px) {
             .st-key-chatbot {
                 right: 20px;
-                bottom: 20px;
+                bottom: 72px;
             }
             .st-key-chatbot button {
                 width: 77px;
@@ -2021,7 +2022,7 @@ def show_chatbot():
                 font-size: 38px;
             }
             [data-testid="stMainBlockContainer"] {
-                padding-bottom: 112px;
+                padding-bottom: 164px;
             }
         }
         .st-key-chatbot button:hover {
